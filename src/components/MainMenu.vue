@@ -51,6 +51,11 @@
         </button>
       </div>
       
+      <div v-if="isRestoringSession" class="loading-message">
+        <div class="spinner"></div>
+        Восстановление сессии...
+      </div>
+      
       <div v-if="errorMessage" class="error-message">
         {{ errorMessage }}
       </div>
@@ -69,12 +74,42 @@ const gameStore = useGameStore()
 
 const joinRoomId = ref('')
 const errorMessage = ref('')
+const isRestoringSession = ref(false)
 
-// Проверяем, есть ли hostId в URL (переход по QR-коду)
-onMounted(() => {
+// Проверяем, есть ли hostId в URL (переход по QR-коду) и сохраненная сессия
+onMounted(async () => {
   const hostIdFromUrl = route.query.host as string
   if (hostIdFromUrl) {
     joinRoomId.value = hostIdFromUrl
+  }
+  
+  // Проверяем наличие сохраненной сессии
+  if (gameStore.hasActiveSession()) {
+    try {
+      isRestoringSession.value = true
+      errorMessage.value = ''
+      
+      console.log('Found saved session, attempting to restore...')
+      const restored = await gameStore.restoreSession()
+      
+      if (restored) {
+        console.log('Session restored successfully, redirecting...')
+        // Перенаправляем на соответствующую страницу в зависимости от состояния игры
+        if (gameStore.gameState.gameStarted) {
+          await router.push('/game')
+        } else {
+          await router.push('/lobby')
+        }
+      } else {
+        console.log('Session restoration failed')
+        errorMessage.value = 'Не удалось восстановить сессию. Создайте новую комнату.'
+      }
+    } catch (error) {
+      console.error('Session restoration error:', error)
+      errorMessage.value = 'Ошибка при восстановлении сессии. Создайте новую комнату.'
+    } finally {
+      isRestoringSession.value = false
+    }
   }
 })
 
@@ -234,6 +269,34 @@ const joinRoom = async () => {
   background: white;
   padding: 0 15px;
   position: relative;
+}
+
+.loading-message {
+  color: #667eea;
+  text-align: center;
+  margin-top: 15px;
+  padding: 15px;
+  background: #f8f9ff;
+  border-radius: 8px;
+  font-size: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+
+.spinner {
+  width: 20px;
+  height: 20px;
+  border: 2px solid #e1e5e9;
+  border-top: 2px solid #667eea;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
 }
 
 .error-message {

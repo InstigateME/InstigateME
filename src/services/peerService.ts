@@ -99,10 +99,23 @@ class PeerService {
   // Отправка сообщения конкретному пиру
   sendMessage(peerId: string, message: PeerMessage) {
     const conn = this.connections.get(peerId)
+    console.log('Attempting to send message:', {
+      peerId,
+      messageType: message.type,
+      connectionExists: !!conn,
+      connectionOpen: conn?.open,
+      totalConnections: this.connections.size
+    })
+    
     if (conn && conn.open) {
       conn.send(message)
+      console.log('Message sent successfully to:', peerId)
     } else {
-      console.warn('Connection not found or closed:', peerId)
+      console.warn('Connection not found or closed:', peerId, {
+        connectionExists: !!conn,
+        connectionOpen: conn?.open,
+        allConnections: Array.from(this.connections.keys())
+      })
     }
   }
   

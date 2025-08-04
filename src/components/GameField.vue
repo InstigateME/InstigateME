@@ -121,8 +121,18 @@ const lightUp = () => {
 }
 
 const getLitUpPlayerName = () => {
+  if (!gameStore.gameState.litUpPlayerId) return ''
+  
   const player = gameStore.gameState.players.find(p => p.id === gameStore.gameState.litUpPlayerId)
-  return player?.nickname || 'Неизвестный игрок'
+  
+  // Если игрок не найден, очищаем litUpPlayerId для предотвращения повторных ошибок
+  if (!player) {
+    console.log('Player not found for litUpPlayerId, clearing it:', gameStore.gameState.litUpPlayerId)
+    gameStore.gameState.litUpPlayerId = null
+    return ''
+  }
+  
+  return player.nickname || 'Игрок'
 }
 
 const leaveGame = () => {
