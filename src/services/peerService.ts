@@ -230,7 +230,19 @@ class PeerService {
   
   // Регистрация обработчика сообщений
   onMessage(type: string, handler: (data: PeerMessage, conn?: DataConnection) => void) {
+    console.log('🔧 Registering message handler for:', type)
     this.messageHandlers.set(type, handler)
+  }
+
+  // Очистка всех обработчиков сообщений (для переинициализации)
+  clearMessageHandlers() {
+    console.log('🧹 Clearing all message handlers')
+    this.messageHandlers.clear()
+  }
+
+  // Получение списка зарегистрированных обработчиков
+  getRegisteredHandlers(): string[] {
+    return Array.from(this.messageHandlers.keys())
   }
   
   // Получение своего ID

@@ -229,7 +229,10 @@ export const useGameStore = defineStore('game', () => {
       // Отправляем запрос на подключение
       peerService.sendMessage(targetHostId, {
         type: 'join_request',
-        payload: { nickname }
+        payload: { 
+          nickname,
+          savedPlayerId: myPlayerId.value // КРИТИЧНО: передаем ID для отслеживания переподключений
+        }
       })
       
       // КРИТИЧНО: Сразу запрашиваем список всех игроков для mesh-подключения
@@ -253,6 +256,10 @@ export const useGameStore = defineStore('game', () => {
   // Настройка обработчиков сообщений для хоста
   const setupHostMessageHandlers = () => {
     console.log('Setting up host message handlers')
+    
+    // КРИТИЧНО: Очищаем старые обработчики перед настройкой новых
+    peerService.clearMessageHandlers()
+    console.log('Cleared old message handlers before setting up host handlers')
     
     peerService.onMessage('join_request', (message, conn) => {
       console.log('Host received join_request:', {
@@ -292,23 +299,65 @@ export const useGameStore = defineStore('game', () => {
       // Проверяем, есть ли игрок с сохраненным ID (переподключение)
       // Используем savedPlayerId из payload сообщения клиента
       const { savedPlayerId } = message.payload
+      console.log('🔍 HOST: Checking for existing player by savedPlayerId:', {
+        savedPlayerId,
+        hasPayloadSavedId: !!savedPlayerId,
+        currentPlayers: gameState.value.players.map(p => ({ id: p.id, nickname: p.nickname, isHost: p.isHost })),
+        currentLitUpPlayerId: gameState.value.litUpPlayerId
+      })
+      
       if (savedPlayerId) {
         const existingPlayerBySavedId = gameState.value.players.find(p => p.id === savedPlayerId && !p.isHost)
+        console.log('🔍 HOST: Search result for existing player:', {
+          existingPlayerFound: !!existingPlayerBySavedId,
+          existingPlayer: existingPlayerBySavedId ? { id: existingPlayerBySavedId.id, nickname: existingPlayerBySavedId.nickname } : null
+        })
+        
         if (existingPlayerBySavedId) {
-          console.log('Found existing player by saved ID, updating connection:', {
+          console.log('✅ HOST: Found existing player by saved ID, updating connection:', {
             savedId: savedPlayerId,
             newConnectionId: conn.peer,
             nickname: nickname
           })
           
+          // КРИТИЧНО: Если этот игрок был подсвечен, обновляем litUpPlayerId на новый ID
+          if (gameState.value.litUpPlayerId === savedPlayerId) {
+            console.log('🔄 HOST: Updating litUpPlayerId from old ID to new ID:', {
+              oldId: savedPlayerId,
+              newId: conn.peer
+            })
+            gameState.value.litUpPlayerId = conn.peer
+          }
+          
           // Обновляем ID соединения существующего игрока
           existingPlayerBySavedId.id = conn.peer
           existingPlayerBySavedId.authToken = generateAuthToken(conn.peer, gameState.value.roomId, Date.now())
           
+          console.log('🎯 HOST: Broadcasting updated game state with new player info:', {
+            updatedPlayer: { id: existingPlayerBySavedId.id, nickname: existingPlayerBySavedId.nickname },
+            newLitUpPlayerId: gameState.value.litUpPlayerId,
+            totalPlayers: gameState.value.players.length
+          })
+          
           broadcastGameState()
-          console.log('Updated existing player:', existingPlayerBySavedId)
+          
+          // КРИТИЧНО: Отправляем специальное сообщение клиенту о смене его ID
+          peerService.sendMessage(conn.peer, {
+            type: 'player_id_updated',
+            payload: { 
+              oldId: savedPlayerId,
+              newId: conn.peer,
+              message: 'Your player ID has been updated due to reconnection'
+            }
+          })
+          
+          console.log('✅ HOST: Updated existing player and sent ID update notification:', existingPlayerBySavedId)
           return
+        } else {
+          console.log('❌ HOST: No existing player found with savedPlayerId, will create new player')
         }
+      } else {
+        console.log('❌ HOST: No savedPlayerId provided in join_request')
       }
       
       // Создаем нового игрока только если такого никнейма нет
@@ -331,21 +380,46 @@ export const useGameStore = defineStore('game', () => {
     })
 
     peerService.onMessage('light_up_request', (message) => {
-      console.log('Host received light_up_request:', message.payload)
+      console.log('🔥 HOST: Received light_up_request:', message.payload)
       const { playerId } = message.payload
       
+      console.log('🔍 HOST: Processing light_up_request:', {
+        requestedPlayerId: playerId,
+        gameStarted: gameState.value.gameStarted,
+        currentPlayers: gameState.value.players.map((p: any) => ({ id: p.id, nickname: p.nickname })),
+        playerExists: gameState.value.players.some((p: any) => p.id === playerId),
+        currentLitUpPlayerId: gameState.value.litUpPlayerId
+      })
+      
       if (gameState.value.gameStarted) {
-        console.log('Processing light up for player:', playerId)
-        gameState.value.litUpPlayerId = playerId
-        broadcastGameState()
+        const playerExists = gameState.value.players.some((p: any) => p.id === playerId)
         
-        // Убираем подсветку через 2 секунды
-        setTimeout(() => {
-          gameState.value.litUpPlayerId = null
+        if (playerExists) {
+          console.log('✅ HOST: Processing light up for valid player:', playerId)
+          gameState.value.litUpPlayerId = playerId
+          
+          console.log('📢 HOST: Broadcasting light up state:', {
+            litUpPlayerId: gameState.value.litUpPlayerId,
+            totalPlayers: gameState.value.players.length,
+            playersInState: gameState.value.players.map((p: any) => ({ id: p.id, nickname: p.nickname }))
+          })
+          
           broadcastGameState()
-        }, 2000)
+          
+          // Убираем подсветку через 2 секунды
+          setTimeout(() => {
+            console.log('⏰ HOST: Clearing light up after timeout')
+            gameState.value.litUpPlayerId = null
+            broadcastGameState()
+          }, 2000)
+        } else {
+          console.log('❌ HOST: Ignoring light_up_request - player not found:', {
+            requestedId: playerId,
+            availablePlayers: gameState.value.players.map((p: any) => p.id)
+          })
+        }
       } else {
-        console.log('Game not started, ignoring light_up_request')
+        console.log('❌ HOST: Game not started, ignoring light_up_request')
       }
     })
     
@@ -369,8 +443,60 @@ export const useGameStore = defineStore('game', () => {
 
   // Настройка обработчиков сообщений для клиента
   const setupClientMessageHandlers = () => {
+    console.log('Setting up client message handlers')
+    
+    // КРИТИЧНО: Очищаем старые обработчики перед настройкой новых
+    peerService.clearMessageHandlers()
+    console.log('Cleared old message handlers before setting up client handlers')
+    
     peerService.onMessage('game_state_update', (message) => {
-      gameState.value = { ...message.payload }
+      const newState = { ...message.payload }
+      
+      // КРИТИЧНО: Валидируем litUpPlayerId при получении обновления состояния
+      if (newState.litUpPlayerId) {
+        console.log('🔍 VALIDATING litUpPlayerId:', {
+          litUpPlayerId: newState.litUpPlayerId,
+          playersInState: newState.players.map(p => ({ id: p.id, nickname: p.nickname })),
+          myPlayerId: myPlayerId.value,
+          totalPlayers: newState.players.length
+        })
+        
+        const litUpPlayerExists = newState.players.some((p: Player) => p.id === newState.litUpPlayerId)
+        if (!litUpPlayerExists) {
+          console.log('🧹 Received invalid litUpPlayerId, clearing it:', {
+            invalidId: newState.litUpPlayerId,
+            availablePlayerIds: newState.players.map((p: Player) => p.id),
+            playersWithNicknames: newState.players.map((p: Player) => ({ id: p.id, nickname: p.nickname }))
+          })
+          newState.litUpPlayerId = null
+        } else {
+          console.log('✅ litUpPlayerId is valid, keeping it:', newState.litUpPlayerId)
+        }
+      }
+      
+      gameState.value = newState
+    })
+    
+    peerService.onMessage('player_id_updated', (message) => {
+      const { oldId, newId, message: updateMessage } = message.payload
+      console.log('🔄 CLIENT: Received player_id_updated message:', {
+        oldId,
+        newId,
+        updateMessage
+      })
+      
+      if (myPlayerId.value === oldId) {
+        console.log('✅ CLIENT: Updating myPlayerId from old ID to new ID:', {
+          oldId,
+          newId
+        })
+        myPlayerId.value = newId
+      } else {
+        console.log('❌ CLIENT: Ignoring player_id_updated message - old ID does not match:', {
+          currentId: myPlayerId.value,
+          oldId
+        })
+      }
     })
     
     peerService.onMessage('heartbeat', (message) => {
@@ -503,12 +629,12 @@ export const useGameStore = defineStore('game', () => {
         peerService.setAsClient()
         setupClientMessageHandlers()
         
-        // Отправляем запрос на подключение
+        // Отправляем запрос на подключение с сохраненным ID для повторного подключения
         peerService.sendMessage(hostId, {
           type: 'join_request',
           payload: { 
             nickname: myNickname.value,
-            savedPlayerId: myPlayerId.value
+            savedPlayerId: myPlayerId.value  // КРИТИЧНО: передаем текущий ID как сохраненный
           }
         })
         
@@ -1899,9 +2025,8 @@ export const useGameStore = defineStore('game', () => {
     console.log('Restoring as client, connecting to:', targetHostId)
     
     try {
-      // Очищаем устаревшие данные о подсветке при восстановлении
-      gameState.value.litUpPlayerId = null
-      console.log('Cleared stale litUpPlayerId on session restore')
+      // ИСПРАВЛЕНО: НЕ очищаем litUpPlayerId сразу, дождемся актуального состояния
+      console.log('Keeping current litUpPlayerId until state sync:', gameState.value.litUpPlayerId)
       
       // Сохраняем старый ID ПЕРЕД его перезаписью
       const originalPlayerId = myPlayerId.value
@@ -1944,11 +2069,21 @@ export const useGameStore = defineStore('game', () => {
         payload: { requesterId: myPlayerId.value }
       })
       
+      // КРИТИЧНО: Запрашиваем список peer'ов для mesh-соединений
+      peerService.sendMessage(targetHostId, {
+        type: 'request_peer_list',
+        payload: { 
+          requesterId: myPlayerId.value,
+          requesterToken: '',
+          timestamp: Date.now()
+        }
+      })
+      
       // Ждем получения обновленного состояния
       await waitForGameStateUpdate()
       
       console.log('Client restored and reconnected with updated state')
-    } catch (error) {
+    } catch (error: unknown) {
       console.error('Failed to restore as client:', error)
       // Если не удалось подключиться к старому хосту, пытаемся найти нового
       await handleHostDisconnection()
