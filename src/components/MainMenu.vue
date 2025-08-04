@@ -78,6 +78,13 @@ const isRestoringSession = ref(false)
 
 // Проверяем, есть ли hostId в URL (переход по QR-коду) и сохраненная сессия
 onMounted(async () => {
+  const savedNickname = localStorage.getItem('savedNickname')
+  if (savedNickname) {
+    gameStore.myNickname = savedNickname
+  } else if (!gameStore.myNickname) {
+    gameStore.myNickname = gameStore.generateDefaultNickname()
+  }
+
   const hostIdFromUrl = route.query.host as string
   if (hostIdFromUrl) {
     joinRoomId.value = hostIdFromUrl
