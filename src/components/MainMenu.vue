@@ -3,7 +3,7 @@
     <div class="container">
       <h1 class="title">P2P Light-Up</h1>
       <p class="subtitle">Многопользовательская игра без сервера</p>
-      
+
       <div class="form-section">
         <div class="input-group">
           <label for="nickname">Ваш никнейм:</label>
@@ -16,8 +16,8 @@
             @keyup.enter="createRoom"
           />
         </div>
-        
-        <button 
+
+        <button
           class="btn btn-primary btn-large"
           @click="createRoom"
           :disabled="!gameStore.myNickname.trim() || gameStore.connectionStatus === 'connecting'"
@@ -25,24 +25,34 @@
           {{ gameStore.connectionStatus === 'connecting' ? 'Создание...' : 'Создать комнату' }}
         </button>
       </div>
-      
+
       <div class="divider">
         <span>или</span>
       </div>
-      
+
       <div class="form-section">
         <div class="input-group">
           <label for="roomId">ID комнаты:</label>
-          <input
-            id="roomId"
-            v-model="joinRoomId"
-            type="text"
-            placeholder="Введите ID комнаты"
-            @keyup.enter="joinRoom"
-          />
+          <div class="input-with-button">
+            <input
+              id="roomId"
+              v-model="joinRoomId"
+              type="text"
+              placeholder="Введите ID комнаты"
+              @keyup.enter="joinRoom"
+            />
+          </div>
         </div>
-        
-        <button 
+
+        <button
+          class="btn btn-secondary btn-medium"
+          style="margin-bottom: 12px;"
+          @click="pasteFromClipboard"
+          :disabled="gameStore.connectionStatus === 'connecting'"
+        >
+          Вставить из буфера
+        </button>
+        <button
           class="btn btn-secondary btn-large"
           @click="joinRoom"
           :disabled="!gameStore.myNickname.trim() || !joinRoomId.trim() || gameStore.connectionStatus === 'connecting'"
@@ -50,12 +60,12 @@
           {{ gameStore.connectionStatus === 'connecting' ? 'Подключение...' : 'Присоединиться' }}
         </button>
       </div>
-      
+
       <div v-if="isRestoringSession" class="loading-message">
         <div class="spinner"></div>
         Восстановление сессии...
       </div>
-      
+
       <div v-if="errorMessage" class="error-message">
         {{ errorMessage }}
       </div>
@@ -89,16 +99,16 @@ onMounted(async () => {
   if (hostIdFromUrl) {
     joinRoomId.value = hostIdFromUrl
   }
-  
+
   // Проверяем наличие сохраненной сессии
   if (gameStore.hasActiveSession()) {
     try {
       isRestoringSession.value = true
       errorMessage.value = ''
-      
+
       console.log('Found saved session, attempting to restore...')
       const restored = await gameStore.restoreSession()
-      
+
       if (restored) {
         console.log('Session restored successfully, redirecting...')
         // Перенаправляем на соответствующую страницу в зависимости от состояния игры
@@ -122,7 +132,7 @@ onMounted(async () => {
 
 const createRoom = async () => {
   if (!gameStore.myNickname.trim()) return
-  
+
   try {
     errorMessage.value = ''
     const roomId = await gameStore.createRoom(gameStore.myNickname.trim())
@@ -136,7 +146,7 @@ const createRoom = async () => {
 
 const joinRoom = async () => {
   if (!gameStore.myNickname.trim() || !joinRoomId.value.trim()) return
-  
+
   try {
     errorMessage.value = ''
     await gameStore.joinRoom(gameStore.myNickname.trim(), joinRoomId.value.trim())
@@ -147,6 +157,18 @@ const joinRoom = async () => {
     errorMessage.value = 'Не удалось подключиться к комнате. Проверьте ID комнаты.'
   }
 }
+const pasteFromClipboard = async () => {
+  try {
+    const text = await navigator.clipboard.readText();
+    if (text) {
+      joinRoomId.value = text.trim();
+      joinRoom();
+    }
+  } catch (error) {
+    console.error('Failed to read clipboard:', error);
+    errorMessage.value = 'Не удалось прочитать буфер обмена.';
+  }
+};
 </script>
 
 <style scoped>
@@ -314,5 +336,74 @@ const joinRoom = async () => {
   background: #fdf2f2;
   border-radius: 8px;
   font-size: 14px;
+}
+.btn-small {
+  padding: 8px 12px;
+  font-size: 14px;
+}
+
+.btn-clipboard {
+  background: linear-gradient(135deg, #ff9a9e 0%, #fad0c4 100%);
+  color: white;
+  margin-left: 10px;
+}
+
+.btn-clipboard:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 5px 15px rgba(255, 154, 158, 0.4);
+}
+.btn-icon {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  margin-left: 10px;
+  font-size: 20px;
+  color: #667eea;
+  transition: color 0.3s ease, transform 0.3s ease;
+}
+
+.btn-icon:disabled {
+  color: #ccc;
+  cursor: not-allowed;
+}
+
+.btn-icon:hover:not(:disabled) {
+  color: #764ba2;
+  transform: scale(1.1);
+}
+
+.icon-clipboard::before {
+  content: '\1F4CB'; /* Unicode for clipboard icon */
+  display: inline-block;
+}
+.input-with-button {
+  display: flex;
+  align-items: center;
+}
+
+.input-with-button input {
+  flex: 1;
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.input-with-button .btn-icon {
+  border: 2px solid #e1e5e9;
+  border-left: none;
+  border-radius: 0 10px 10px 0;
+  margin-left: 0;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: white;
+  color: #667eea;
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+.input-with-button .btn-icon:hover:not(:disabled) {
+  background: #f0f4ff;
+  color: #764ba2;
 }
 </style>
