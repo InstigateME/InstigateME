@@ -2,12 +2,12 @@
   <div class="game-field">
     <div class="container">
       <div class="header">
-        <h1 class="title">P2P Light-Up</h1>
+        <h1 class="title">Провокатор</h1>
         <button class="leave-btn" @click="leaveGame">
           Покинуть игру
         </button>
       </div>
-      
+
       <div class="game-info">
         <p class="players-count">Игроков: {{ gameStore.gameState.players.length }}</p>
         <div class="status-info">
@@ -18,74 +18,230 @@
             Код комнаты: <strong>{{ gameStore.gameState.roomId }}</strong>
           </div>
         </div>
-        <p class="instruction">Нажмите кнопку "Подсветить меня", чтобы подсветить свой квадрат</p>
+        <p class="instruction">
+          {{ phaseInstruction }}
+        </p>
       </div>
-      
-      <!-- Игровая сетка -->
-      <div class="game-grid">
-        <div 
-          v-for="player in gameStore.gameState.players" 
-          :key="player.id"
-          class="player-square"
-          :class="{ 
-            'lit-up': gameStore.gameState.litUpPlayerId === player.id,
-            'my-square': player.id === gameStore.myPlayerId 
-          }"
-          :style="{ 
-            backgroundColor: player.color,
-            borderColor: player.color 
-          }"
-        >
-          <div class="player-info">
-            <div class="player-nickname">{{ player.nickname }}</div>
-            <div class="player-id">{{ player.id.substring(0, 8) }}...</div>
-            <div v-if="player.isHost" class="host-indicator">👑</div>
-          </div>
-          
-          <!-- Эффект подсветки -->
-          <div v-if="gameStore.gameState.litUpPlayerId === player.id" class="light-effect"></div>
-        </div>
-      </div>
-      
-      <!-- Кнопка управления -->
-      <div class="control-section">
-        <button 
-          class="light-up-btn"
-          @click="lightUp"
-          :disabled="gameStore.gameState.litUpPlayerId !== null"
-          :class="{ 'pulsing': gameStore.gameState.litUpPlayerId === gameStore.myPlayerId }"
-        >
-          {{ buttonText }}
+
+      <!-- Этап: ожидание старта -->
+      <div v-if="!gameStore.gameState.gameStarted" class="waiting-block">
+        <p>Ожидание старта игры...</p>
+        <button v-if="gameStore.isHost && gameStore.canStartGame" @click="startGame">
+          Начать игру
         </button>
       </div>
-      
-      <!-- Информация о текущем действии -->
-      <div v-if="gameStore.gameState.litUpPlayerId" class="action-info">
-        <p>
-          <strong>{{ getLitUpPlayerName() }}</strong> подсвечивается!
-        </p>
+
+      <!-- Этап: вопрос -->
+      <div v-else>
+        <div v-if="phase === 'question'">
+          <div class="question-block">
+            <h2>Вопрос</h2>
+            <div class="question-card">
+              {{ currentQuestion || '—' }}
+            </div>
+            <button v-if="isMyTurn && !currentQuestion" @click="drawCard">
+              Вытянуть вопрос
+            </button>
+            <div v-if="currentQuestion && !voted" class="vote-section">
+              <h3>Голосование</h3>
+              <p>Выберите, кто подходит под описание (2 голоса):</p>
+              <div class="players-list">
+                <button
+                  v-for="player in otherPlayers"
+                  :key="player.id"
+                  :disabled="voteSelection.length >= 2 && !voteSelection.includes(player.id)"
+                  :class="{ selected: voteSelection.includes(player.id) }"
+                  @click="toggleVote(player.id)"
+                >
+                  {{ player.nickname }}
+                </button>
+              </div>
+              <button
+                :disabled="voteSelection.length !== 2"
+                @click="submitVote"
+              >
+                Проголосовать
+              </button>
+            </div>
+            <div v-if="voted && !betPlaced" class="bet-section">
+              <h3>Ставка</h3>
+              <p>Как думаете, сколько голосов наберёте?</p>
+              <div class="bet-cards">
+                <button
+                  v-for="bet in myPlayer.bettingCards"
+                  :key="bet"
+                  :class="{ selected: betSelection === bet }"
+                  @click="selectBet(bet)"
+                >
+                  {{ bet }}
+                </button>
+              </div>
+              <button :disabled="!betSelection" @click="submitBet">
+                Сделать ставку
+              </button>
+            </div>
+            <div v-if="voted && betPlaced">
+              <p>Ожидание других игроков...</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Этап: результаты -->
+        <div v-if="phase === 'results'">
+          <div class="results-block">
+            <h2>Результаты раунда</h2>
+            <div class="votes-list">
+              <div v-for="player in gameStore.gameState.players" :key="player.id">
+                <strong>{{ player.nickname }}</strong> — голосов: {{ voteCounts[player.id] || 0 }}, ставка: {{ bets[player.id] || '-' }}, очки: {{ scores[player.id] || 0 }}
+              </div>
+            </div>
+            <button v-if="isMyTurn" @click="finishRound">
+              Следующий раунд
+            </button>
+          </div>
+        </div>
+
+        <!-- Этап: режим 2.0 -->
+        <div v-if="phase === 'advanced-answer'">
+          <div class="advanced-block">
+            <h2>Кто будет отвечать?</h2>
+            <p>Тайное голосование: выберите, кто должен отвечать на вопрос</p>
+            <div class="players-list">
+              <button
+                v-for="player in otherPlayers"
+                :key="player.id"
+                :disabled="voteSelection.length >= 2 && !voteSelection.includes(player.id)"
+                :class="{ selected: voteSelection.includes(player.id) }"
+                @click="toggleVote(player.id)"
+              >
+                {{ player.nickname }}
+              </button>
+            </div>
+            <button
+              :disabled="voteSelection.length !== 2"
+              @click="submitVote"
+            >
+              Проголосовать
+            </button>
+          </div>
+        </div>
+        <div v-if="phase === 'advanced-write'">
+          <div class="advanced-block">
+            <h2>Ответ игрока</h2>
+            <div v-if="isAnsweringPlayer">
+              <textarea v-model="answerText" placeholder="Введите ваш ответ"></textarea>
+              <button :disabled="!answerText" @click="submitAnswer">Отправить ответ</button>
+            </div>
+            <div v-else>
+              <p>Ожидание ответа игрока...</p>
+            </div>
+          </div>
+        </div>
+        <div v-if="phase === 'advanced-guess'">
+          <div class="advanced-block">
+            <h2>Угадай ответ</h2>
+            <div v-if="!guessed">
+              <textarea v-model="guessText" placeholder="Ваш вариант ответа"></textarea>
+              <button :disabled="!guessText" @click="submitGuess">Отправить</button>
+            </div>
+            <div v-else>
+              <p>Ожидание других игроков...</p>
+            </div>
+          </div>
+        </div>
+        <div v-if="phase === 'advanced-results'">
+          <div class="results-block">
+            <h2>Результаты раунда</h2>
+            <div>
+              <p>Ответ: <strong>{{ advancedAnswer }}</strong></p>
+              <div v-for="player in gameStore.gameState.players" :key="player.id">
+                <strong>{{ player.nickname }}</strong> — {{ guesses[player.id] || '-' }} {{ scores[player.id] ? `(+${scores[player.id]})` : '' }}
+              </div>
+            </div>
+            <button v-if="isMyTurn" @click="finishRound">
+              Следующий раунд
+            </button>
+          </div>
+        </div>
+
+        <!-- Таблица очков -->
+        <div class="score-table">
+          <h3>Таблица очков</h3>
+          <table>
+            <tr>
+              <th>Игрок</th>
+              <th>Очки</th>
+            </tr>
+            <tr v-for="player in gameStore.gameState.players" :key="player.id">
+              <td>{{ player.nickname }}</td>
+              <td>{{ scores[player.id] || 0 }}</td>
+            </tr>
+          </table>
+          <div v-if="isGameOver" class="winner-block">
+            <h2>Победитель: {{ winnerName }}</h2>
+            <button @click="restartGame">Начать новую игру</button>
+          </div>
+        </div>
       </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useGameStore } from '@/stores/gameStore'
 
 const router = useRouter()
 const gameStore = useGameStore()
 
-// Computed свойства
-const buttonText = computed(() => {
-  if (gameStore.gameState.litUpPlayerId === gameStore.myPlayerId) {
-    return 'Подсвечиваюсь...'
-  } else if (gameStore.gameState.litUpPlayerId) {
-    return 'Кто-то подсвечивается...'
-  } else {
-    return 'Подсветить меня'
-  }
+const phase = ref<'question' | 'results' | 'advanced-answer' | 'advanced-write' | 'advanced-guess' | 'advanced-results'>('question')
+const voteSelection = ref<string[]>([])
+const betSelection = ref<string | null>(null)
+const answerText = ref('')
+const guessText = ref('')
+const voted = ref(false)
+const betPlaced = ref(false)
+const guessed = ref(false)
+const advancedAnswer = ref('')
+const currentQuestion = computed(() => gameStore.gameState.currentQuestion)
+const myPlayer = computed(() => gameStore.myPlayer || { bettingCards: [] })
+const isMyTurn = computed(() => gameStore.gameState.players[gameStore.gameState.currentTurn]?.id === gameStore.myPlayerId)
+const otherPlayers = computed(() => gameStore.gameState.players.filter(p => p.id !== gameStore.myPlayerId))
+const scores = computed(() => gameStore.gameState.scores || {})
+const bets = computed(() => gameStore.gameState.bets || {})
+const guesses = computed(() => gameStore.gameState.guesses || {})
+const voteCounts = computed(() => {
+  const counts: Record<string, number> = {}
+  const votes = gameStore.gameState.votes || {}
+  Object.values(votes).forEach((arr: string[]) => {
+    arr.forEach(id => {
+      counts[id] = (counts[id] || 0) + 1
+    })
+  })
+  return counts
+})
+
+const isAnsweringPlayer = computed(() => {
+  // В режиме advanced, игрок с макс. голосов отвечает
+  if (!gameStore.gameState.votes) return false
+  const counts: Record<string, number> = {}
+  Object.values(gameStore.gameState.votes).forEach((arr: string[]) => {
+    arr.forEach(id => {
+      counts[id] = (counts[id] || 0) + 1
+    })
+  })
+  const maxVotes = Math.max(0, ...Object.values(counts))
+  const leaders = Object.entries(counts).filter(([_, c]) => c === maxVotes && maxVotes > 0).map(([id]) => id)
+  return leaders[0] === gameStore.myPlayerId
+})
+
+const phaseInstruction = computed(() => {
+  if (!gameStore.gameState.gameStarted) return 'Ожидание старта игры...'
+  if (phase.value === 'question') return 'Вытяните вопрос, проголосуйте и сделайте ставку.'
+  if (phase.value === 'results') return 'Смотрите результаты раунда.'
+  if (phase.value.startsWith('advanced')) return 'Режим 2.0: письменные ответы и угадывания.'
+  return ''
 })
 
 const connectionStatusText = computed(() => {
@@ -114,37 +270,139 @@ const connectionStatusClass = computed(() => {
   }
 })
 
-// Методы
-const lightUp = () => {
-  if (gameStore.gameState.litUpPlayerId !== null) return
-  gameStore.lightUpPlayer()
-}
-
-const getLitUpPlayerName = () => {
-  if (!gameStore.gameState.litUpPlayerId) return ''
-  
-  const player = gameStore.gameState.players.find(p => p.id === gameStore.gameState.litUpPlayerId)
-  
-  // ИСПРАВЛЕНО: НЕ изменяем состояние напрямую из компонента
-  // Валидация происходит в gameStore при обновлении состояния
-  if (!player) {
-    console.log('Player not found for litUpPlayerId (will be handled by store):', gameStore.gameState.litUpPlayerId)
-    return 'Неизвестный игрок'
-  }
-  
-  return player.nickname || 'Игрок'
-}
-
-const leaveGame = () => {
+function leaveGame() {
   gameStore.leaveRoom()
   router.push('/')
 }
 
+function startGame() {
+  gameStore.startGame(gameStore.gameMode)
+}
+
+function drawCard() {
+  gameStore.drawCard()
+}
+
+function toggleVote(id: string) {
+  if (voteSelection.value.includes(id)) {
+    voteSelection.value = voteSelection.value.filter(x => x !== id)
+  } else if (voteSelection.value.length < 2) {
+    voteSelection.value.push(id)
+  }
+}
+
+function submitVote() {
+  gameStore.submitVote(gameStore.myPlayerId, [...voteSelection.value])
+  voted.value = true
+}
+
+function selectBet(bet: string) {
+  betSelection.value = bet
+}
+
+function submitBet() {
+  if (!betSelection.value) return
+  gameStore.submitBet(gameStore.myPlayerId, betSelection.value)
+  betPlaced.value = true
+}
+
+function finishRound() {
+  gameStore.finishRound()
+  resetLocal()
+}
+
+function submitAnswer() {
+  gameStore.submitAnswer(gameStore.myPlayerId, answerText.value)
+  advancedAnswer.value = answerText.value
+}
+
+function submitGuess() {
+  gameStore.submitGuess(gameStore.myPlayerId, guessText.value)
+  guessed.value = true
+}
+
+function resetLocal() {
+  voteSelection.value = []
+  betSelection.value = null
+  answerText.value = ''
+  guessText.value = ''
+  voted.value = false
+  betPlaced.value = false
+  guessed.value = false
+  advancedAnswer.value = ''
+}
+
+watch(() => gameStore.gameState.currentQuestion, (val) => {
+  if (val) {
+    phase.value = gameStore.gameMode === 'advanced' ? 'advanced-answer' : 'question'
+    resetLocal()
+  }
+})
+
+watch(() => gameStore.gameState.votes, (val) => {
+  // Если все проголосовали — переход к ставкам или к следующему этапу
+  const total = gameStore.gameState.players.length
+  if (val && Object.keys(val).length === total) {
+    if (gameStore.gameMode === 'basic') {
+      phase.value = 'question'
+    } else {
+      // advanced: после голосования — ответ
+      phase.value = 'advanced-write'
+    }
+  }
+})
+
+watch(() => gameStore.gameState.bets, (val) => {
+  if (gameStore.gameMode === 'basic') {
+    const total = gameStore.gameState.players.length
+    if (val && Object.keys(val).length === total) {
+      phase.value = 'results'
+    }
+  }
+})
+
+watch(() => gameStore.gameState.answers, (val) => {
+  if (gameStore.gameMode === 'advanced' && val) {
+    // После ответа — угадывания
+    phase.value = 'advanced-guess'
+  }
+})
+
+watch(() => gameStore.gameState.guesses, (val) => {
+  if (gameStore.gameMode === 'advanced' && val) {
+    const total = gameStore.gameState.players.length - 1
+    if (Object.keys(val).length === total) {
+      phase.value = 'advanced-results'
+    }
+  }
+})
+
+const MAX_ROUNDS = 10 // Можно вынести в настройки
+
+const isGameOver = computed(() => {
+  // Пример: игра завершается после N раундов или если закончились вопросы
+  return gameStore.gameState.questionCards.length === 0 ||
+    (gameStore.gameState.currentTurn >= MAX_ROUNDS)
+})
+
+const winnerName = computed(() => {
+  const max = Math.max(...Object.values(scores.value))
+  const winner = gameStore.gameState.players.find(p => scores.value[p.id] === max)
+  return winner ? winner.nickname : '—'
+})
+
+function restartGame() {
+  gameStore.startGame(gameStore.gameMode)
+  phase.value = 'question'
+}
+
 onMounted(() => {
-  // Проверяем, что игра началась
   if (!gameStore.gameState.gameStarted || !gameStore.myPlayerId) {
     router.push('/')
     return
+  }
+  if (!gameStore.gameState.currentQuestion) {
+    phase.value = 'question'
   }
 })
 </script>
@@ -421,15 +679,15 @@ onMounted(() => {
     gap: 15px;
     padding: 15px;
   }
-  
+
   .player-square {
     border-radius: 15px;
   }
-  
+
   .player-nickname {
     font-size: 1.2rem;
   }
-  
+
   .light-up-btn {
     padding: 16px 32px;
     font-size: 1.1rem;
@@ -442,15 +700,15 @@ onMounted(() => {
     grid-template-columns: 1fr 1fr;
     gap: 10px;
   }
-  
+
   .player-square {
     border-radius: 12px;
   }
-  
+
   .player-nickname {
     font-size: 1rem;
   }
-  
+
   .player-id {
     font-size: 0.8rem;
   }

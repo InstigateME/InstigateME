@@ -1,5 +1,5 @@
-import { ref, computed, watch } from 'vue'
-import { defineStore } from 'pinia'
+import {ref, computed, watch} from 'vue'
+import {defineStore} from 'pinia'
 import type {
   Player,
   GameState,
@@ -18,7 +18,7 @@ import type {
   ExtendedSessionData,
   HostRecoveryAnnouncementPayload
 } from '@/types/game'
-import { peerService } from '@/services/peerService'
+import {peerService} from '@/services/peerService'
 import {
   MIGRATION_TIMEOUT,
   VOTE_TIMEOUT,
@@ -36,16 +36,176 @@ interface SessionData extends ExtendedSessionData {
 }
 
 export const useGameStore = defineStore('game', () => {
+
+  // Game mechanics for "Провокатор"
+  // Структура голосов: { [voterId]: [targetId, targetId] }
+  // Структура ставок: { [playerId]: '0' | '+-' | '+' }
+  // Структура очков: { [playerId]: number }
+
+  // Режим игры: 'basic' — обычный, 'advanced' — 2.0 (с письменными ответами)
+  const gameMode = ref<'basic' | 'advanced'>('basic');
+
+  const initializeGame = (mode: 'basic' | 'advanced' = 'basic') => {
+    gameMode.value = mode;
+    gameState.value.questionCards = Array.from({length: 20}, (_, i) => `Карточка ${i + 1}`);
+    gameState.value.players.forEach((player) => {
+      player.votingCards = ['Карточка 1', 'Карточка 2'];
+      player.bettingCards = ['0', '+-', '+'];
+    });
+    gameState.value.scores = {};
+    gameState.value.players.forEach((player) => {
+      gameState.value.scores[player.id] = 0;
+    });
+    gameState.value.currentTurn = 0;
+    gameState.value.currentQuestion = null;
+    gameState.value.votes = {};
+    gameState.value.bets = {};
+    // Для режима 2.0
+    if (mode === 'advanced') {
+      gameState.value.answers = {};
+      gameState.value.guesses = {};
+    }
+  };
+
+  // Обработка голосов и ставок после раунда
+  const processRound = () => {
+    // Безопасно получаем значения
+    const votesObj = gameState.value.votes ?? {};
+    const betsObj = gameState.value.bets ?? {};
+
+    // Подсчёт голосов за каждого игрока
+    const voteCounts: Record<string, number> = {};
+    Object.values(votesObj).forEach((voteArr: string[]) => {
+      voteArr.forEach(targetId => {
+        if (!voteCounts[targetId]) voteCounts[targetId] = 0;
+        voteCounts[targetId]++;
+      });
+    });
+
+    // Определяем максимум голосов
+    const maxVotes = Math.max(0, ...Object.values(voteCounts));
+    // Находим лидеров
+    const leaders = Object.entries(voteCounts)
+      .filter(([_, count]) => count === maxVotes && maxVotes > 0)
+      .map(([playerId]) => playerId);
+
+    // Начисляем очки по правилам
+    gameState.value.players.forEach(player => {
+      const pid = player.id;
+      const bet = betsObj[pid];
+      const votes = voteCounts[pid] || 0;
+
+      if (leaders.includes(pid) && bet === '+') {
+        // Лидер и правильно предсказал
+        gameState.value.scores[pid] += votes;
+      } else if (votes === 0 && bet === '0') {
+        // Никто не проголосовал и ставка "0"
+        gameState.value.scores[pid] += 1;
+      } else if (bet === '+-' && votes > 0 && !leaders.includes(pid)) {
+        // Получил голоса, но не лидер, и ставка "+-"
+        gameState.value.scores[pid] += 1;
+      }
+      // В остальных случаях очки не начисляются
+    });
+
+    // Сброс голосов и ставок
+    gameState.value.votes = {};
+    gameState.value.bets = {};
+  };
+
+  // mode: 'basic' | 'advanced'
+  const startGame = (mode: 'basic' | 'advanced' = 'basic') => {
+    if (!canStartGame.value) return;
+    initializeGame(mode);
+    gameState.value.gameStarted = true;
+    broadcastGameState();
+  };
+
+  const drawCard = () => {
+    if (gameState.value.questionCards.length === 0) return null;
+    const card = gameState.value.questionCards.shift() || null;
+    gameState.value.currentQuestion = card;
+    return card;
+  };
+
+  // Игрок делает голос: votesArr — массив из двух id выбранных игроков
+  const submitVote = (voterId: string, votesArr: string[]) => {
+    gameState.value.votes![voterId] = votesArr;
+  };
+
+  // Игрок делает ставку: bet — '0' | '+-' | '+'
+  const submitBet = (playerId: string, bet: string) => {
+    gameState.value.bets![playerId] = bet;
+  };
+
+  // Завершить раунд: подсчёт очков, сброс, переход хода
+  const finishRound = () => {
+    if (gameMode.value === 'basic') {
+      processRound();
+      gameState.value.currentTurn = (gameState.value.currentTurn + 1) % gameState.value.players.length;
+      gameState.value.currentQuestion = null;
+      gameState.value.players.forEach((player) => {
+        player.votingCards = ['Карточка 1', 'Карточка 2'];
+        player.bettingCards = ['0', '+-', '+'];
+      });
+    } else if (gameMode.value === 'advanced') {
+      // Подсчёт очков для режима 2.0
+      // Игрок с большинством голосов отвечает, остальные угадывают
+      const votesObj = gameState.value.votes ?? {};
+      // Подсчёт голосов
+      const voteCounts: Record<string, number> = {};
+      Object.values(votesObj).forEach((voteArr: string[]) => {
+        voteArr.forEach(targetId => {
+          if (!voteCounts[targetId]) voteCounts[targetId] = 0;
+          voteCounts[targetId]++;
+        });
+      });
+      // Находим игрока с макс. голосов
+      const maxVotes = Math.max(0, ...Object.values(voteCounts));
+      const leaders = Object.entries(voteCounts)
+        .filter(([_, count]) => count === maxVotes && maxVotes > 0)
+        .map(([playerId]) => playerId);
+      const answeringPlayerId = leaders[0] || null;
+      // Проверяем ответы
+      if (answeringPlayerId && gameState.value.answers && gameState.value.guesses) {
+        const answer = gameState.value.answers[answeringPlayerId];
+        Object.entries(gameState.value.guesses).forEach(([playerId, guess]) => {
+          if (playerId !== answeringPlayerId && guess && answer && guess.trim().toLowerCase() === answer.trim().toLowerCase()) {
+            gameState.value.scores[playerId] = (gameState.value.scores[playerId] || 0) + 1;
+          }
+        });
+      }
+      // Сброс
+      gameState.value.currentTurn = (gameState.value.currentTurn + 1) % gameState.value.players.length;
+      gameState.value.currentQuestion = null;
+      gameState.value.votes = {};
+      gameState.value.answers = {};
+      gameState.value.guesses = {};
+    }
+    broadcastGameState();
+  };
   // Состояние игры
-  const gameState = ref<GameState>({
+  const gameState = ref<GameState & {
+    currentQuestion?: string | null,
+    votes?: Record<string, string[]>,
+    bets?: Record<string, string>
+  }>({
     roomId: '',
     gameStarted: false,
     players: [],
     litUpPlayerId: null,
     maxPlayers: 8,
     hostId: '',
-    createdAt: 0
-  })
+    createdAt: 0,
+    questionCards: Array.from({length: 20}, (_, i) => `Карточка ${i + 1}`),
+    votingCards: {},
+    bettingCards: {},
+    currentTurn: 0,
+    scores: {},
+    currentQuestion: null,
+    votes: {},
+    bets: {}
+  });
 
   // Локальные данные
   const myPlayerId = ref<string>('')
@@ -76,12 +236,12 @@ export const useGameStore = defineStore('game', () => {
       '#DDA0DD', '#98D8C8', '#F7DC6F', '#BB8FCE', '#85C1E9'
     ]
     return colors[Math.floor(Math.random() * colors.length)]
-  }
+  };
 
   // Генерация никнейма по умолчанию
   const NICKNAME_PREFIX = 'Player'
 
-const generateDefaultNickname = (): string => {
+  const generateDefaultNickname = (): string => {
     return `${NICKNAME_PREFIX}${Math.floor(Math.random() * 9999)}`
   }
 
@@ -139,7 +299,7 @@ const generateDefaultNickname = (): string => {
         isHost.value = true
         roomId.value = existingSession.roomId
         hostId.value = restoredPeerId
-        gameState.value = { ...existingSession.gameState }
+        gameState.value = {...existingSession.gameState}
         gameState.value.hostId = restoredPeerId
 
         // Обновляем мой ID в списке игроков
@@ -193,7 +353,9 @@ const generateDefaultNickname = (): string => {
           color: generateRandomColor(),
           isHost: true,
           joinedAt: now,
-          authToken: generateAuthToken(restoredPeerId, targetRoomId, now)
+          authToken: generateAuthToken(restoredPeerId, targetRoomId, now),
+          votingCards: ['Карточка 1', 'Карточка 2'],
+          bettingCards: ['0', '+-', '+']
         }
 
         gameState.value.players = [hostPlayer]
@@ -287,7 +449,7 @@ const generateDefaultNickname = (): string => {
         return
       }
 
-      const { nickname } = message.payload
+      const {nickname} = message.payload
 
       // Сначала проверяем, не подключен ли уже этот игрок по ID
       const existingPlayerById = gameState.value.players.find(p => p.id === conn.peer)
@@ -300,11 +462,11 @@ const generateDefaultNickname = (): string => {
 
       // Проверяем, есть ли игрок с сохраненным ID (переподключение)
       // Используем savedPlayerId из payload сообщения клиента
-      const { savedPlayerId } = message.payload
+      const {savedPlayerId} = message.payload
       console.log('🔍 HOST: Checking for existing player by savedPlayerId:', {
         savedPlayerId,
         hasPayloadSavedId: !!savedPlayerId,
-        currentPlayers: gameState.value.players.map(p => ({ id: p.id, nickname: p.nickname, isHost: p.isHost })),
+        currentPlayers: gameState.value.players.map(p => ({id: p.id, nickname: p.nickname, isHost: p.isHost})),
         currentLitUpPlayerId: gameState.value.litUpPlayerId
       })
 
@@ -312,7 +474,10 @@ const generateDefaultNickname = (): string => {
         const existingPlayerBySavedId = gameState.value.players.find(p => p.id === savedPlayerId && !p.isHost)
         console.log('🔍 HOST: Search result for existing player:', {
           existingPlayerFound: !!existingPlayerBySavedId,
-          existingPlayer: existingPlayerBySavedId ? { id: existingPlayerBySavedId.id, nickname: existingPlayerBySavedId.nickname } : null
+          existingPlayer: existingPlayerBySavedId ? {
+            id: existingPlayerBySavedId.id,
+            nickname: existingPlayerBySavedId.nickname
+          } : null
         })
 
         if (existingPlayerBySavedId) {
@@ -336,7 +501,7 @@ const generateDefaultNickname = (): string => {
           existingPlayerBySavedId.authToken = generateAuthToken(conn.peer, gameState.value.roomId, Date.now())
 
           console.log('🎯 HOST: Broadcasting updated game state with new player info:', {
-            updatedPlayer: { id: existingPlayerBySavedId.id, nickname: existingPlayerBySavedId.nickname },
+            updatedPlayer: {id: existingPlayerBySavedId.id, nickname: existingPlayerBySavedId.nickname},
             newLitUpPlayerId: gameState.value.litUpPlayerId,
             totalPlayers: gameState.value.players.length
           })
@@ -370,7 +535,9 @@ const generateDefaultNickname = (): string => {
         color: generateRandomColor(),
         isHost: false,
         joinedAt: now,
-        authToken: generateAuthToken(conn.peer, gameState.value.roomId, now)
+        authToken: generateAuthToken(conn.peer, gameState.value.roomId, now),
+        votingCards: ['Карточка 1', 'Карточка 2'],
+        bettingCards: ['0', '+-', '+']
       }
 
       console.log('Adding new player:', newPlayer)
@@ -378,17 +545,17 @@ const generateDefaultNickname = (): string => {
 
       // Отправляем обновленное состояние всем игрокам
       broadcastGameState()
-      console.log('Updated players list:', gameState.value.players.map(p => ({ id: p.id, nickname: p.nickname })))
+      console.log('Updated players list:', gameState.value.players.map(p => ({id: p.id, nickname: p.nickname})))
     })
 
     peerService.onMessage('light_up_request', (message) => {
       console.log('🔥 HOST: Received light_up_request:', message.payload)
-      const { playerId } = message.payload
+      const {playerId} = message.payload
 
       console.log('🔍 HOST: Processing light_up_request:', {
         requestedPlayerId: playerId,
         gameStarted: gameState.value.gameStarted,
-        currentPlayers: gameState.value.players.map((p: any) => ({ id: p.id, nickname: p.nickname })),
+        currentPlayers: gameState.value.players.map((p: any) => ({id: p.id, nickname: p.nickname})),
         playerExists: gameState.value.players.some((p: any) => p.id === playerId),
         currentLitUpPlayerId: gameState.value.litUpPlayerId
       })
@@ -403,7 +570,7 @@ const generateDefaultNickname = (): string => {
           console.log('📢 HOST: Broadcasting light up state:', {
             litUpPlayerId: gameState.value.litUpPlayerId,
             totalPlayers: gameState.value.players.length,
-            playersInState: gameState.value.players.map((p: any) => ({ id: p.id, nickname: p.nickname }))
+            playersInState: gameState.value.players.map((p: any) => ({id: p.id, nickname: p.nickname}))
           })
 
           broadcastGameState()
@@ -452,13 +619,13 @@ const generateDefaultNickname = (): string => {
     console.log('Cleared old message handlers before setting up client handlers')
 
     peerService.onMessage('game_state_update', (message) => {
-      const newState = { ...message.payload }
+      const newState = {...message.payload}
 
       // КРИТИЧНО: Валидируем litUpPlayerId при получении обновления состояния
       if (newState.litUpPlayerId) {
         console.log('🔍 VALIDATING litUpPlayerId:', {
           litUpPlayerId: newState.litUpPlayerId,
-          playersInState: newState.players.map(p => ({ id: p.id, nickname: p.nickname })),
+          playersInState: newState.players.map(p => ({id: p.id, nickname: p.nickname})),
           myPlayerId: myPlayerId.value,
           totalPlayers: newState.players.length
         })
@@ -468,7 +635,7 @@ const generateDefaultNickname = (): string => {
           console.log('🧹 Received invalid litUpPlayerId, clearing it:', {
             invalidId: newState.litUpPlayerId,
             availablePlayerIds: newState.players.map((p: Player) => p.id),
-            playersWithNicknames: newState.players.map((p: Player) => ({ id: p.id, nickname: p.nickname }))
+            playersWithNicknames: newState.players.map((p: Player) => ({id: p.id, nickname: p.nickname}))
           })
           newState.litUpPlayerId = null
         } else {
@@ -480,7 +647,7 @@ const generateDefaultNickname = (): string => {
     })
 
     peerService.onMessage('player_id_updated', (message) => {
-      const { oldId, newId, message: updateMessage } = message.payload
+      const {oldId, newId, message: updateMessage} = message.payload
       console.log('🔄 CLIENT: Received player_id_updated message:', {
         oldId,
         newId,
@@ -502,7 +669,7 @@ const generateDefaultNickname = (): string => {
     })
 
     peerService.onMessage('heartbeat', (message) => {
-      const { hostId: heartbeatHostId } = message.payload
+      const {hostId: heartbeatHostId} = message.payload
       peerService.handleHeartbeat(heartbeatHostId)
     })
 
@@ -531,13 +698,7 @@ const generateDefaultNickname = (): string => {
     }
   }
 
-  // Старт игры (только хост)
-  const startGame = () => {
-    if (!canStartGame.value) return
-
-    gameState.value.gameStarted = true
-    broadcastGameState()
-  }
+  // --- Удалены дублирующиеся функции ---
 
   // Подсветка игрока
   const lightUpPlayer = () => {
@@ -569,7 +730,7 @@ const generateDefaultNickname = (): string => {
       // Клиент отправляет запрос хосту
       peerService.sendMessage(hostId.value, {
         type: 'light_up_request',
-        payload: { playerId: myPlayerId.value }
+        payload: {playerId: myPlayerId.value}
       })
     }
   }
@@ -643,7 +804,7 @@ const generateDefaultNickname = (): string => {
         // Запрашиваем актуальное состояние игры
         peerService.sendMessage(hostId, {
           type: 'request_game_state',
-          payload: { requesterId: myPlayerId.value }
+          payload: {requesterId: myPlayerId.value}
         })
 
         connectionStatus.value = 'connected'
@@ -674,7 +835,7 @@ const generateDefaultNickname = (): string => {
       console.log('🔄 Grace period completed, starting migration process...')
       console.log('🔍 MIGRATION START STATE:', {
         originalHostId,
-        currentGameStatePlayers: gameState.value.players.map(p => ({ id: p.id, nickname: p.nickname, isHost: p.isHost })),
+        currentGameStatePlayers: gameState.value.players.map(p => ({id: p.id, nickname: p.nickname, isHost: p.isHost})),
         myPlayerId: myPlayerId.value,
         connectionStatus: connectionStatus.value,
         migrationInProgress: migrationState.value.inProgress,
@@ -690,7 +851,7 @@ const generateDefaultNickname = (): string => {
         originalHostId,
         playersBeforeFilter,
         playersAfterFilter,
-        remainingPlayers: gameState.value.players.map(p => ({ id: p.id, nickname: p.nickname, authToken: !!p.authToken }))
+        remainingPlayers: gameState.value.players.map(p => ({id: p.id, nickname: p.nickname, authToken: !!p.authToken}))
       })
 
       // Проверяем токены оставшихся игроков
@@ -698,14 +859,21 @@ const generateDefaultNickname = (): string => {
       console.log('🔍 TOKEN VALIDATION:', {
         totalPlayers: gameState.value.players.length,
         validPlayers: validPlayers.length,
-        invalidPlayers: gameState.value.players.filter(p => !validateAuthToken(p)).map(p => ({ id: p.id, nickname: p.nickname, hasToken: !!p.authToken }))
+        invalidPlayers: gameState.value.players.filter(p => !validateAuthToken(p)).map(p => ({
+          id: p.id,
+          nickname: p.nickname,
+          hasToken: !!p.authToken
+        }))
       })
 
       if (validPlayers.length === 0) {
         throw new Error('No valid players remaining after grace period')
       }
 
-      console.log('Valid players remaining after grace period:', validPlayers.map(p => ({ id: p.id, nickname: p.nickname })))
+      console.log('Valid players remaining after grace period:', validPlayers.map(p => ({
+        id: p.id,
+        nickname: p.nickname
+      })))
 
       // Быстрая проверка - может кто-то уже стал хостом во время grace period
       console.log('Final check: Quick host discovery among remaining players...')
@@ -738,7 +906,7 @@ const generateDefaultNickname = (): string => {
       console.log('🔍 CONNECTION ANALYSIS:', {
         totalConnections: activeConnections.length,
         openConnections: openConnections.length,
-        connectionDetails: activeConnections.map(c => ({ peerId: c.peerId, isOpen: c.isOpen })),
+        connectionDetails: activeConnections.map(c => ({peerId: c.peerId, isOpen: c.isOpen})),
         knownPeers: peerService.getAllKnownPeers()
       })
 
@@ -751,7 +919,7 @@ const generateDefaultNickname = (): string => {
           selectedHostId: deterministicHost,
           myPlayerId: myPlayerId.value,
           amISelected: deterministicHost === myPlayerId.value,
-          validPlayersForElection: validPlayers.map(p => ({ id: p.id, nickname: p.nickname }))
+          validPlayersForElection: validPlayers.map(p => ({id: p.id, nickname: p.nickname}))
         })
 
         if (deterministicHost === myPlayerId.value) {
@@ -938,7 +1106,8 @@ const generateDefaultNickname = (): string => {
             try {
               console.log('Closing unsaved discovery connection:', conn.peer)
               conn.close()
-            } catch (e) { /* ignore */ }
+            } catch (e) { /* ignore */
+            }
           } else {
             console.log('Keeping saved connection:', conn.peer)
           }
@@ -965,7 +1134,7 @@ const generateDefaultNickname = (): string => {
       gameState.value.hostId = discoveredHost.currentHostId
 
       // Синхронизируем состояние игры с найденным хостом
-      gameState.value = { ...discoveredHost.gameState }
+      gameState.value = {...discoveredHost.gameState}
 
       // Устанавливаем роль клиента
       peerService.setAsClient()
@@ -976,7 +1145,7 @@ const generateDefaultNickname = (): string => {
       // Запрашиваем актуальное состояние игры
       peerService.sendMessage(discoveredHost.currentHostId, {
         type: 'request_game_state',
-        payload: { requesterId: myPlayerId.value }
+        payload: {requesterId: myPlayerId.value}
       })
 
       connectionStatus.value = 'connected'
@@ -1028,8 +1197,8 @@ const generateDefaultNickname = (): string => {
     }
 
     console.log('🔍 HOST ELECTION ALGORITHM:', {
-      validPlayers: validPlayers.map(p => ({ id: p.id, nickname: p.nickname })),
-      sortedPlayers: sortedPlayers.map(p => ({ id: p.id, nickname: p.nickname })),
+      validPlayers: validPlayers.map(p => ({id: p.id, nickname: p.nickname})),
+      sortedPlayers: sortedPlayers.map(p => ({id: p.id, nickname: p.nickname})),
       selectedHost: sortedPlayers[0],
       myPlayerId: myPlayerId.value,
       amISelected: sortedPlayers[0].id === myPlayerId.value
@@ -1133,7 +1302,7 @@ const generateDefaultNickname = (): string => {
       // Валидируем предложение
       console.log('🔍 VALIDATING MIGRATION PROPOSAL:', {
         proposedHostId: payload.proposedHostId,
-        currentPlayers: gameState.value.players.map(p => ({ id: p.id, nickname: p.nickname, authToken: !!p.authToken })),
+        currentPlayers: gameState.value.players.map(p => ({id: p.id, nickname: p.nickname, authToken: !!p.authToken})),
         proposedHostToken: payload.proposedHostToken ? 'present' : 'missing'
       })
 
@@ -1352,7 +1521,7 @@ const generateDefaultNickname = (): string => {
       // Запрашиваем актуальное состояние игры
       peerService.sendMessage(newHostId, {
         type: 'request_game_state',
-        payload: { requesterId: myPlayerId.value }
+        payload: {requesterId: myPlayerId.value}
       })
 
       connectionStatus.value = 'connected'
@@ -1586,7 +1755,7 @@ const generateDefaultNickname = (): string => {
       // Запрашиваем актуальное состояние игры
       peerService.sendMessage(newHostId, {
         type: 'request_game_state',
-        payload: { requesterId: myPlayerId.value }
+        payload: {requesterId: myPlayerId.value}
       })
 
       connectionStatus.value = 'connected'
@@ -1676,7 +1845,7 @@ const generateDefaultNickname = (): string => {
       connectionStatus.value = 'connecting'
 
       // Восстанавливаем локальное состояние
-      gameState.value = { ...sessionData.gameState }
+      gameState.value = {...sessionData.gameState}
       myPlayerId.value = sessionData.myPlayerId
       myNickname.value = sessionData.myNickname
       roomId.value = sessionData.roomId
@@ -1922,7 +2091,7 @@ const generateDefaultNickname = (): string => {
       // Если получили более свежее состояние игры - обновляем
       if (sync.timestamp > gameState.value.createdAt) {
         console.log('Updating to newer game state from:', sync.fromPlayerId)
-        gameState.value = { ...sync.gameState }
+        gameState.value = {...sync.gameState}
       }
     })
 
@@ -1970,7 +2139,7 @@ const generateDefaultNickname = (): string => {
       }
 
       // Обновляем состояние игры с восстановленного хоста
-      gameState.value = { ...announcement.gameState }
+      gameState.value = {...announcement.gameState}
       hostId.value = announcement.recoveredHostId
 
       // Если я не восстановленный хост - становлюсь клиентом
@@ -2068,7 +2237,7 @@ const generateDefaultNickname = (): string => {
       // Запрашиваем актуальное состояние игры
       peerService.sendMessage(targetHostId, {
         type: 'request_game_state',
-        payload: { requesterId: myPlayerId.value }
+        payload: {requesterId: myPlayerId.value}
       })
 
       // КРИТИЧНО: Запрашиваем список peer'ов для mesh-соединений
@@ -2103,11 +2272,11 @@ const generateDefaultNickname = (): string => {
 
         // Проверяем, что у нас есть актуальные данные игроков
         const hasValidPlayers = gameState.value.players.length > 0 &&
-                               gameState.value.players.some(p => p.nickname && p.nickname !== '')
+          gameState.value.players.some(p => p.nickname && p.nickname !== '')
 
         // Проверяем корректность litUpPlayerId - если указан, то игрок должен существовать
         const litUpPlayerValid = !gameState.value.litUpPlayerId ||
-                                gameState.value.players.some(p => p.id === gameState.value.litUpPlayerId)
+          gameState.value.players.some(p => p.id === gameState.value.litUpPlayerId)
 
         if ((hasValidPlayers && litUpPlayerValid) || attempts >= maxAttempts) {
           // Очищаем некорректный litUpPlayerId если игрок не найден
@@ -2117,7 +2286,7 @@ const generateDefaultNickname = (): string => {
           }
 
           console.log('Game state synchronized, players:', gameState.value.players.length,
-                     'litUpPlayerId:', gameState.value.litUpPlayerId)
+            'litUpPlayerId:', gameState.value.litUpPlayerId)
           resolve()
         } else {
           // Пробуем еще раз через короткий интервал
@@ -2155,7 +2324,18 @@ const generateDefaultNickname = (): string => {
       litUpPlayerId: null,
       maxPlayers: 8,
       hostId: '',
-      createdAt: 0
+      createdAt: 0,
+      questionCards: [],
+      votingCards: {},
+      bettingCards: {},
+      currentTurn: 0,
+      scores: {},
+      // Для режима 2.0 (advanced)
+      answers: {},
+      guesses: {},
+      currentQuestion: null,
+      votes: {},
+      bets: {}
     }
 
     myPlayerId.value = ''
@@ -2183,7 +2363,7 @@ const generateDefaultNickname = (): string => {
         saveSession()
       }
     },
-    { deep: true }
+    {deep: true}
   )
 
   return {
@@ -2195,6 +2375,7 @@ const generateDefaultNickname = (): string => {
     hostId,
     roomId,
     connectionStatus,
+    gameMode,
 
     // Computed
     canStartGame,
@@ -2206,8 +2387,22 @@ const generateDefaultNickname = (): string => {
     joinRoom,
     startGame,
     lightUpPlayer,
+    drawCard,
+    submitVote,
+    submitBet,
+    finishRound,
     leaveRoom,
     broadcastGameState,
+
+    // Advanced mode actions
+    submitAnswer: (playerId: string, answer: string) => {
+      if (!gameState.value.answers) gameState.value.answers = {};
+      gameState.value.answers[playerId] = answer;
+    },
+    submitGuess: (playerId: string, guess: string) => {
+      if (!gameState.value.guesses) gameState.value.guesses = {};
+      gameState.value.guesses[playerId] = guess;
+    },
 
     // Session Management
     saveSession,

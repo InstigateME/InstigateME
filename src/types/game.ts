@@ -1,10 +1,12 @@
 export interface Player {
-  id: string
-  nickname: string
-  color: string
-  isHost: boolean
-  joinedAt: number // Время подключения для упорядочивания
-  authToken: string // Токен безопасности для проверки подлинности
+  id: string;
+  nickname: string;
+  color: string;
+  isHost: boolean;
+  joinedAt: number;
+  authToken: string;
+  votingCards: string[]; // Cards for voting
+  bettingCards: string[]; // Cards for betting
 }
 
 export interface GameState {
@@ -15,6 +17,14 @@ export interface GameState {
   maxPlayers: number
   hostId: string // Текущий ID хоста
   createdAt: number // Время создания комнаты
+  questionCards: string[] // Карточки с вопросами
+  votingCards: Record<string, string[]> // Карточки голосования для каждого игрока
+  bettingCards: Record<string, string[]> // Карточки ставок для каждого игрока
+  currentTurn: number // Индекс текущего игрока
+  scores: Record<string, number> // Очки игроков
+  // Для режима 2.0 (advanced)
+  answers?: Record<string, string>
+  guesses?: Record<string, string>
 }
 
 export interface PeerMessage {
@@ -24,7 +34,7 @@ export interface PeerMessage {
         'host_discovery_request' | 'host_discovery_response' |
         'request_peer_list' | 'peer_list_update' | 'direct_connection_request' |
         'state_sync' | 'new_host_election' | 'host_recovery_announcement' | 
-        'network_merge_request' | 'network_merge_response' | 'split_brain_detection'
+        'network_merge_request' | 'network_merge_response' | 'split_brain_detection' | 'player_id_updated'
   payload?: any
 }
 
