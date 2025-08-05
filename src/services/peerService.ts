@@ -18,6 +18,8 @@ import {
 
 class PeerService {
   private peer: Peer | null = null
+  // Флаг мягкого завершения, чтобы подавлять автоматические переподключения/ошибки при уничтожении
+  private isShuttingDown: boolean = false
   private connections: Map<string, DataConnection> = new Map()
   private messageHandlers: Map<string, (data: PeerMessage, conn?: DataConnection) => void> = new Map()
   // Дедупликация сообщений по ключу (type+roomId+userId+timestamp)
@@ -99,10 +101,15 @@ class PeerService {
       })
       
       this.peer.on('error', (error) => {
+        if (this.isShuttingDown) {
+          // Подавляем ошибки в процессе штатного завершения
+          console.log('Peer error suppressed during shutdown:', error?.type || error)
+          return
+        }
         console.error('Peer error:', error)
         
         // Если не удалось восстановить сохраненный ID - создаем новый
-        if (targetPeerId && error.type === 'unavailable-id') {
+        if (targetPeerId && (error as any)?.type === 'unavailable-id') {
           console.log('❌ Saved ID unavailable, creating new host and clearing localStorage...')
           
           // Очищаем устаревший ID из localStorage
@@ -138,9 +145,13 @@ class PeerService {
       
       // Добавляем обработчик переподключения для хоста
       this.peer.on('disconnected', () => {
+        if (this.isShuttingDown) {
+          console.log('🔌 Host disconnected during shutdown - skipping auto-reconnect')
+          return
+        }
         console.log('🔌 Host disconnected from signaling server, attempting reconnect...')
         setTimeout(() => {
-          if (this.peer && !this.peer.open) {
+          if (this.peer && !this.peer.open && !this.isShuttingDown) {
             console.log('🔄 Reconnecting host to signaling server...')
             this.peer.reconnect()
           }
@@ -171,6 +182,10 @@ class PeerService {
       })
       
       this.peer.on('error', (error) => {
+        if (this.isShuttingDown) {
+          console.log('Peer error suppressed during shutdown:', (error as any)?.type || error)
+          return
+        }
         console.error('Peer error:', error)
         reject(error)
       })
@@ -1088,17 +1103,33 @@ class PeerService {
   
   // Закрытие всех соединений
   disconnect() {
+    // Помечаем начало мягкого завершения, чтобы подавлять ошибки/автореконнекты
+    this.isShuttingDown = true
+
     this.stopHeartbeat()
     this.cancelHostRecoveryGracePeriod()
     
-    this.connections.forEach((conn) => {
-      conn.close()
-    })
+    // Закрываем все data-каналы
+    try {
+      this.connections.forEach((conn) => {
+        try { conn.close() } catch {}
+      })
+    } catch {}
     this.connections.clear()
     
+    // Корректно отключаемся от сигнального сервера перед destroy
     if (this.peer) {
-      this.peer.destroy()
-      this.peer = null
+      try {
+        // Снимаем критичные обработчики, чтобы не инициировать reconnect
+        try { (this.peer as any).removeAllListeners?.('disconnected') } catch {}
+        try { (this.peer as any).removeAllListeners?.('error') } catch {}
+      } catch {}
+      try { this.peer.disconnect() } catch {}
+      // Небольшая задержка, чтобы стек успокоился, затем уничтожаем
+      setTimeout(() => {
+        try { this.peer && this.peer.destroy() } catch {}
+        this.peer = null
+      }, 0)
     }
     
     this.isHostRole = false
@@ -1109,6 +1140,9 @@ class PeerService {
     this.knownPeers.clear()
     this.pendingConnections.clear()
     this.isConnectingToPeer.clear()
+
+    // Сбрасываем флаг после полного завершения в конце таска
+    setTimeout(() => { this.isShuttingDown = false }, 0)
   }
 }
 

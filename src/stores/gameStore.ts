@@ -947,8 +947,8 @@ export const useGameStore = defineStore('game', () => {
       }
 
       // Игрок должен существовать
-      const playerExists = gameState.value.players.some((p: Player) => p.id === userId)
-      if (!playerExists) {
+      const leavingPlayer = gameState.value.players.find((p: Player) => p.id === userId)
+      if (!leavingPlayer) {
         console.log('❌ Ignoring user_left_room - player not found:', userId)
         return
       }
@@ -957,10 +957,11 @@ export const useGameStore = defineStore('game', () => {
       if (!gameState.value.presence) gameState.value.presence = {}
       if (!gameState.value.presenceMeta) gameState.value.presenceMeta = {}
 
-      // Идемпотентность: если уже absent с той же причиной и leftAt не меньше — игнорируем
-      const alreadyAbsent = gameState.value.presence[userId] === 'absent'
+      // Идемпотентность по времени
       const prevMeta = gameState.value.presenceMeta[userId]
-      if (alreadyAbsent && prevMeta?.leftAt && prevMeta.leftAt >= timestamp) {
+      const prevLeftAt = prevMeta?.leftAt || 0
+      const ts = timestamp || Date.now()
+      if (gameState.value.presence[userId] === 'absent' && prevLeftAt >= ts) {
         console.log('ℹ️ Duplicate/older user_left_room ignored for', userId)
         return
       }
@@ -968,35 +969,98 @@ export const useGameStore = defineStore('game', () => {
       // Обновляем счет, если передан (не сбрасываем очки)
       if (typeof currentScore === 'number') {
         gameState.value.scores[userId] = currentScore
-      } else {
-        // Гарантируем, что счет существует
-        if (gameState.value.scores[userId] === undefined) {
-          gameState.value.scores[userId] = 0
-        }
+      } else if (gameState.value.scores[userId] === undefined) {
+        gameState.value.scores[userId] = 0
       }
 
-      // Отмечаем отсутствие
+      // Помечаем отсутствие и метаданные
       gameState.value.presence[userId] = 'absent'
       gameState.value.presenceMeta[userId] = {
-        lastSeen: Math.max(prevMeta?.lastSeen || 0, timestamp),
-        leftAt: timestamp,
+        lastSeen: Math.max(prevMeta?.lastSeen || 0, ts),
+        leftAt: ts,
         reason: reason || 'explicit_leave'
       }
 
-      // Если текущий ход у вышедшего — не меняем принудительно хода здесь, UI должен блокировать действия отсутствующего
+      // Удаляем игрока из списка игроков комнаты (отражается в "Игроки в комнате")
+      // Идемпотентно чистим связанные структуры состояния
+      try {
+        // Удаляем из players
+        gameState.value.players = gameState.value.players.filter((p: Player) => p.id !== userId)
+
+        // Очищаем голосование/ставки/догадки
+        if (gameState.value.votes) {
+          const nv: Record<string, string[]> = {}
+          Object.entries(gameState.value.votes).forEach(([k, v]) => {
+            if (k !== userId) {
+              nv[k] = (v || []).filter(t => t !== userId)
+            }
+          })
+          gameState.value.votes = nv
+        }
+        if (gameState.value.voteCounts) {
+          const nc: Record<string, number> = {}
+          Object.entries(gameState.value.voteCounts).forEach(([k, v]) => {
+            if (k !== userId) nc[k] = v
+          })
+          gameState.value.voteCounts = nc
+        }
+        if (gameState.value.bets) {
+          const nb: Record<string, '0' | '±' | '+'> = {}
+          Object.entries(gameState.value.bets).forEach(([k, v]) => {
+            if (k !== userId) nb[k] = v as any
+          })
+          gameState.value.bets = nb
+        }
+        if (gameState.value.guesses) {
+          const ng: Record<string, string> = {}
+          Object.entries(gameState.value.guesses).forEach(([k, v]) => {
+            if (k !== userId) {
+              const mappedVal = v === userId ? '' : v
+              if (mappedVal) ng[k] = mappedVal
+            }
+          })
+          gameState.value.guesses = ng
+        }
+        if (gameState.value.roundScores) {
+          const nr: Record<string, number> = {}
+          Object.entries(gameState.value.roundScores).forEach(([k, v]) => {
+            if (k !== userId) nr[k] = v
+          })
+          gameState.value.roundScores = nr
+        }
+        // Очистка вспомогательных ссылок
+        if (gameState.value.litUpPlayerId === userId) {
+          gameState.value.litUpPlayerId = null
+        }
+        if (gameState.value.currentTurnPlayerId === userId) {
+          // Сдвигаем ход на следующего по кругу, если кто-то остался
+          const players = gameState.value.players
+          if (players.length > 0) {
+            const nextIndex = gameState.value.currentTurn ? gameState.value.currentTurn % players.length : 0
+            gameState.value.currentTurn = nextIndex
+            gameState.value.currentTurnPlayerId = players[nextIndex]?.id || null
+          } else {
+            gameState.value.currentTurn = 0
+            gameState.value.currentTurnPlayerId = null
+          }
+        }
+      } catch (e) {
+        console.warn('Failed to cleanup state for leaving player', e)
+      }
 
       // Рассылаем broadcast об уходе (для ARIA/тостов на клиентах)
-      const leftBroadcast = makeMessage(
-        'user_left_broadcast',
-        {
-          userId,
-          roomId: gameState.value.roomId,
-          timestamp: Date.now(),
-          reason: reason || 'explicit_leave'
-        },
-        { roomId: gameState.value.roomId, fromId: gameState.value.hostId, ts: Date.now() }
+      peerService.broadcastMessage(
+        makeMessage(
+          'user_left_broadcast',
+          {
+            userId,
+            roomId: gameState.value.roomId,
+            timestamp: Date.now(),
+            reason: reason || 'explicit_leave'
+          },
+          { roomId: gameState.value.roomId, fromId: gameState.value.hostId, ts: Date.now() }
+        )
       )
-      peerService.broadcastMessage(leftBroadcast)
 
       // Обновляем основное состояние игры для всех
       broadcastGameState()
@@ -3923,7 +3987,7 @@ export const useGameStore = defineStore('game', () => {
         }
       }
 
-      // 2) Формируем и отправляем событие user_left_room
+      // 2) Формируем и отправляем событие user_left_room (одна попытка, без ретраев)
       const payload = {
         userId: me,
         roomId: roomId.value || gameState.value.roomId,
@@ -3932,20 +3996,18 @@ export const useGameStore = defineStore('game', () => {
         reason: 'explicit_leave' as const
       }
 
-      // Отправляем c ретраями, но не ждём game_state_update
-      gotFreshState.value = false
-      await sendWithRetry(
-        hostId.value || gameState.value.hostId,
-        () =>
+      try {
+        peerService.sendMessage(
+          hostId.value || gameState.value.hostId,
           makeMessage(
             'user_left_room',
             payload as any,
             { roomId: payload.roomId, fromId: me, ts: Date.now() }
-          ),
-        3,
-        300,
-        false
-      )
+          )
+        )
+      } catch {
+        // Игнорируем: это best-effort уведомление, хост может обработать по таймауту присутствия
+      }
 
       // 3) Отключаемся и чистим локальные данные, но не сбрасываем визуально историю очков
       peerService.disconnect()

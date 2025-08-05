@@ -179,10 +179,20 @@ const startGame = () => {
   }
 }
 
-// Покинуть комнату
+// Покинуть комнату: мгновенная навигация, сетевые операции — в фоне
 const leaveRoom = () => {
-  gameStore.leaveRoom()
+  // Сразу уходим на главную
   router.push('/')
+
+  // В фоне уведомляем хоста и закрываем соединение
+  ;(async () => {
+    try {
+      await gameStore.leaveGracefully()
+    } catch {
+      // Fallback на случай ошибки сети
+      try { gameStore.leaveRoom() } catch {}
+    }
+  })()
 }
 
 // Отслеживание начала игры
