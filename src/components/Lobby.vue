@@ -10,11 +10,7 @@
 
       <!-- Хост секция -->
       <div v-if="gameStore.isHost" class="host-section">
-        <div v-if="gameStore.connectionStatus !== 'connected'" class="reconnect-banner">
-          <span class="dot"></span>
-          Восстанавливаем подключение… сохраняем состояние игры.
-        </div>
-        <div v-else>
+        <div>
         <div class="room-info">
           <div class="room-id-section">
             <h3>ID комнаты для подключения:</h3>
@@ -61,21 +57,13 @@
 
       <!-- Клиент секция -->
       <div v-else class="client-section">
-        <div v-if="gameStore.connectionStatus !== 'connected'" class="reconnect-banner">
-          <span class="dot"></span>
-          Переподключение к хосту… сохраняем состояние игры.
-        </div>
-        <div v-else class="waiting-message">
+        <div class="waiting-message">
           <h3>Ожидание начала игры...</h3>
           <p>Хост начнет игру, когда будет готов</p>
         </div>
       </div>
 
       <!-- Список игроков -->
-      <div v-if="gameStore.connectionStatus === 'connecting'" class="reconnect-banner">
-        <span class="dot"></span>
-        Восстанавливаем подключение к хосту…
-      </div>
 
       <div class="players-section">
         <h3>Игроки в комнате ({{ gameStore.gameState.players.length }}/{{ gameStore.gameState.maxPlayers }}):</h3>
