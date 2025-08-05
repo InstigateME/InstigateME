@@ -1,6 +1,12 @@
 import Peer from 'peerjs'
 import type { DataConnection } from 'peerjs'
 import type { PeerMessage, HeartbeatPayload, MessageMeta } from '@/types/game'
+import type {
+  StateSnapshotPayload,
+  StateDiffPayload,
+  StateAckPayload,
+  ResyncRequestPayload
+} from '@/types/game'
 import { 
   HEARTBEAT_INTERVAL, 
   HEARTBEAT_TIMEOUT, 
@@ -174,8 +180,18 @@ class PeerService {
   // Обработка входящих соединений (для хоста)
   private handleIncomingConnection(conn: DataConnection) {
     console.log('New connection from:', conn.peer)
+    // Важно: сохраняем входящее соединение в пул СРАЗУ и навешиваем обработчики до первой отправки
     this.connections.set(conn.peer, conn)
     this.setupConnectionHandlers(conn)
+
+    // Восстановительный хук: если это хост, считаем это потенциальным "reconnect" клиента
+    if (this.isHostRole && this.onClientReconnectedCallback) {
+      try {
+        this.onClientReconnectedCallback(conn.peer)
+      } catch (e) {
+        console.warn('onClientReconnected callback failed in handleIncomingConnection:', e)
+      }
+    }
   }
   
   // Настройка обработчиков для соединения
@@ -183,6 +199,23 @@ class PeerService {
     conn.on('data', (data) => {
       const message = data as PeerMessage
       console.log('📥 RECEIVED MESSAGE:', message.type, 'from:', conn.peer, 'payload:', message.payload)
+      // На всякий случай актуализируем пул соединений по первому сообщению клиента
+      // (PeerJS иногда даёт короткоживущие conn, удержим последний активный)
+      try {
+        const existing = this.connections.get(conn.peer)
+        if (!existing || existing !== conn || !existing.open) {
+          console.log('🔁 Updating pool connection for peer:', conn.peer, { hadExisting: !!existing, wasOpen: existing?.open })
+          this.connections.set(conn.peer, conn)
+        }
+      } catch {}
+
+      // Debug: highlight critical init messages
+      if (message.type === 'request_game_state' || message.type === 'join_request') {
+        console.log('🧭 INIT MESSAGE RECEIVED on', this.isHostRole ? 'HOST' : 'CLIENT', 'side. Will respond accordingly.')
+      }
+      if (message.type === 'state_snapshot' || message.type === 'game_state_update') {
+        console.log('🧭 INIT SYNC MESSAGE RECEIVED on', this.isHostRole ? 'HOST' : 'CLIENT', 'side. This should populate client state.')
+      }
 
       // Простая дедупликация по ключу
       try {
@@ -239,6 +272,47 @@ class PeerService {
     })
   }
   
+  // Отправка сообщения с небольшим ретраем, если канал был только что переустановлен
+  private async sendMessageWithRetry(peerId: string, message: PeerMessage, attempts = 2, delayMs = 120): Promise<void> {
+    for (let i = 0; i < attempts; i++) {
+      const conn = this.connections.get(peerId)
+      console.log('Attempting to send message:', {
+        peerId,
+        messageType: message.type,
+        connectionExists: !!conn,
+        connectionOpen: conn?.open,
+        totalConnections: this.connections.size,
+        attempt: i + 1,
+        attempts
+      })
+      if (conn && conn.open) {
+        try {
+          conn.send(message)
+          console.log('Message sent successfully to:', peerId)
+          return
+        } catch (err) {
+          console.error('Failed to send over open connection:', peerId, err)
+        }
+      } else {
+        // Попробуем удалить неактивное и дождаться возможного повторного входящего соединения
+        if (conn && !conn.open) {
+          this.connections.delete(peerId)
+          console.warn('Removed closed connection from pool:', peerId)
+        }
+      }
+      if (i < attempts - 1) {
+        await new Promise(res => setTimeout(res, delayMs))
+      }
+    }
+    // Финальный лог в случае неудачи
+    const finalConn = this.connections.get(peerId)
+    console.warn('Connection not found or closed (after retries):', peerId, {
+      connectionExists: !!finalConn,
+      connectionOpen: finalConn?.open,
+      allConnections: Array.from(this.connections.keys())
+    })
+  }
+
   // Отправка сообщения конкретному пиру
   sendMessage(peerId: string, message: PeerMessage) {
     // Предочистка неактивных соединений перед отправкой
@@ -250,35 +324,9 @@ class PeerService {
     } catch (e) {
       console.warn('Cleanup before send failed (non-critical):', e)
     }
-
-    const conn = this.connections.get(peerId)
-    console.log('Attempting to send message:', {
-      peerId,
-      messageType: message.type,
-      connectionExists: !!conn,
-      connectionOpen: conn?.open,
-      totalConnections: this.connections.size
-    })
-    
-    if (conn && conn.open) {
-      try {
-        conn.send(message)
-        console.log('Message sent successfully to:', peerId)
-      } catch (err) {
-        console.error('Failed to send over open connection:', peerId, err)
-      }
-    } else {
-      // Если соединение отсутствует или закрыто — удаляем его из пула для консистентности
-      if (conn && !conn.open) {
-        this.connections.delete(peerId)
-        console.warn('Removed closed connection from pool:', peerId)
-      }
-      console.warn('Connection not found or closed:', peerId, {
-        connectionExists: !!conn,
-        connectionOpen: conn?.open,
-        allConnections: Array.from(this.connections.keys())
-      })
-    }
+    // Используем безопасную отправку с коротким ретраем — это покрывает кейс,
+    // когда conn успел пересоздаться между приёмом запроса и отправкой ответа.
+    void this.sendMessageWithRetry(peerId, message, 2, 120)
   }
   
   // Отправка сообщения всем подключенным пирам (для хоста)
@@ -971,6 +1019,73 @@ class PeerService {
     this.broadcastMessage(msg)
   }
 
+  // ===== New helpers for versioned sync (host side minimal skeleton) =====
+  hostSendSnapshot(toPeerId: string, payload: StateSnapshotPayload) {
+    const metaRoom = this.currentRoomId || payload.meta.roomId
+    const fromId = this.getMyId() || ''
+    const ts = Date.now()
+    console.log('📤 HOST sending state_snapshot:', {
+      toPeerId,
+      roomId: metaRoom,
+      fromId,
+      ts,
+      version: (payload as any)?.meta?.version,
+      players: Array.isArray((payload as any)?.state?.players) ? (payload as any).state.players.length : -1,
+      phase: (payload as any)?.state?.phase
+    })
+    const msg: PeerMessage = {
+      type: 'state_snapshot',
+      protocolVersion: PROTOCOL_VERSION,
+      meta: { roomId: metaRoom, fromId, ts },
+      payload
+    } as any
+    this.sendMessage(toPeerId, msg)
+  }
+
+  hostBroadcastDiff(payload: StateDiffPayload) {
+    const metaRoom = this.currentRoomId || payload.meta.roomId
+    const fromId = this.getMyId() || ''
+    const ts = Date.now()
+    console.log('📤 HOST broadcasting state_diff:', {
+      roomId: metaRoom,
+      fromId,
+      ts,
+      version: (payload as any)?.meta?.version
+    })
+    const msg: PeerMessage = {
+      type: 'state_diff',
+      protocolVersion: PROTOCOL_VERSION,
+      meta: { roomId: metaRoom, fromId, ts },
+      payload
+    } as any
+    this.broadcastMessage(msg)
+  }
+
+  // Lightweight guards (room-scoped)
+  guardRoom(meta?: MessageMeta): boolean {
+    if (!meta) return true
+    if (this.currentRoomId && meta.roomId && meta.roomId !== this.currentRoomId) {
+      console.warn('Guard: ignoring message for different room', { current: this.currentRoomId, incoming: meta.roomId })
+      return false
+    }
+    return true
+  }
+
+  // Registration helpers for ack/resync (handlers set by store)
+  onStateAck(handler: (payload: StateAckPayload, fromId: string) => void) {
+    this.onMessage('state_ack', (m, conn) => {
+      if (!this.guardRoom(m.meta)) return
+      handler((m as any).payload as StateAckPayload, conn?.peer || '')
+    })
+  }
+
+  onResyncRequest(handler: (payload: ResyncRequestPayload, fromId: string) => void) {
+    this.onMessage('resync_request', (m, conn) => {
+      if (!this.guardRoom(m.meta)) return
+      handler((m as any).payload as ResyncRequestPayload, conn?.peer || '')
+    })
+  }
+  
   // Закрытие всех соединений
   disconnect() {
     this.stopHeartbeat()

@@ -76,6 +76,63 @@ export interface GameState {
 
 export const PROTOCOL_VERSION = 1
 
+// ===== Versioned sync protocol (backward-compatible) =====
+
+// Common version meta for versioned state messages
+export interface StateVersionMeta {
+  roomId: string
+  version: number
+  prevVersion?: number
+  serverTime: number
+}
+
+// Snapshot envelope: authoritative full state from host
+export interface StateSnapshotPayload {
+  meta: StateVersionMeta
+  state: GameState
+}
+
+// Diff envelope: incremental patch from host
+export type JsonPatch =
+  | Record<string, any>
+  | null
+
+export interface StateDiffPayload {
+  meta: StateVersionMeta
+  // Patch semantics: deep-merge + null means delete a key
+  patch: JsonPatch
+}
+
+// Ack from client for specific version
+export interface StateAckPayload {
+  roomId: string
+  version: number
+  receivedAt: number
+}
+
+// Resync request from client when gap detected or no init
+export interface ResyncRequestPayload {
+  roomId: string
+  fromVersion?: number
+  reason: 'gap' | 'init_missing' | 'late_join' | 'reconnect'
+}
+
+// Control message confirming join and echoing server meta
+export interface JoinOkPayload {
+  roomId: string
+  hostId: string
+  serverTime: number
+  // Latest known version on host at the moment of join
+  latestVersion?: number
+}
+
+// Backward-compatible new message types
+export type JoinOkMessage = BaseMessage<'join_ok', JoinOkPayload>
+export type StateSnapshotMessage = BaseMessage<'state_snapshot', StateSnapshotPayload>
+export type StateDiffMessage = BaseMessage<'state_diff', StateDiffPayload>
+export type StateAckMessage = BaseMessage<'state_ack', StateAckPayload>
+export type ResyncRequestMessage = BaseMessage<'resync_request', ResyncRequestPayload>
+
 // Метаданные сообщения
 export interface MessageMeta {
   roomId: string
@@ -178,6 +235,12 @@ export type PeerMessage =
   | UserLeftRoomMessage
   | UserJoinedBroadcastMessage
   | UserLeftBroadcastMessage
+  // Versioned sync protocol (backward-compatible)
+  | JoinOkMessage
+  | StateSnapshotMessage
+  | StateDiffMessage
+  | StateAckMessage
+  | ResyncRequestMessage
 
 // Утилита для конструирования исходящих сообщений
 export function makeMessage<TType extends PeerMessage['type']>(

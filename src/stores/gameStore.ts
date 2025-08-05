@@ -519,6 +519,100 @@ export const useGameStore = defineStore('game', () => {
 
   // Локальные данные
   const myPlayerId = ref<string>('')
+
+  // ===== Versioned sync client state (backward-compatible) =====
+  const currentVersion = ref<number>(0)
+  const initReceived = ref<boolean>(false)
+  const lastServerTime = ref<number>(0)
+  const pendingDiffs = ref<Map<number, any>>(new Map())
+
+  // Fallback ожидания первичного снапшота и легаси-инициализации
+  const SNAPSHOT_TIMEOUT_MS = 2500
+  let _snapshotTimeoutHandle: number | null = null
+  const _acceptLegacyAsInit = ref<boolean>(false)
+
+  // --- Helpers for versioned sync ---
+  function deepMerge(target: any, patch: any) {
+    if (patch === null) {
+      return null
+    }
+    if (Array.isArray(patch)) {
+      // массивы заменяем целиком
+      return patch.slice()
+    }
+    if (typeof patch !== 'object' || patch === null) {
+      return patch
+    }
+    if (typeof target !== 'object' || target === null) {
+      target = {}
+    }
+    const result: any = Array.isArray(target) ? target.slice() : { ...target }
+    for (const key of Object.keys(patch)) {
+      const val = (patch as any)[key]
+      if (val === null) {
+        // null => delete key
+        if (Array.isArray(result)) {
+          // непредусмотрено для массивов — пропускаем
+        } else {
+          delete result[key]
+        }
+      } else if (typeof val === 'object' && !Array.isArray(val)) {
+        result[key] = deepMerge(result[key], val)
+      } else {
+        result[key] = Array.isArray(val) ? val.slice() : val
+      }
+    }
+    return result
+  }
+
+  function applyDiff(patch: any) {
+    if (patch === null || patch === undefined) return
+    const next = deepMerge(gameState.value, patch)
+    if (next !== null) {
+      gameState.value = next as any
+    }
+  }
+
+  function drainPending() {
+    let nextVer = (currentVersion.value || 0) + 1
+    while (pendingDiffs.value.has(nextVer)) {
+      const payload = pendingDiffs.value.get(nextVer)
+      pendingDiffs.value.delete(nextVer)
+      try {
+        applyDiff(payload?.patch)
+        currentVersion.value = nextVer
+        lastServerTime.value = Math.max(lastServerTime.value, payload?.meta?.serverTime || 0)
+        nextVer++
+      } catch (e) {
+        console.warn('Failed to apply buffered diff', e)
+        break
+      }
+    }
+  }
+
+  function sendAck(version: number) {
+    try {
+      peerService.broadcastMessage(
+        makeMessage(
+          'state_ack' as any,
+          { roomId: roomId.value || gameState.value.roomId, version, receivedAt: Date.now() } as any,
+          { roomId: roomId.value || gameState.value.roomId, fromId: myPlayerId.value, ts: Date.now() }
+        )
+      )
+    } catch {}
+  }
+
+  function requestResync(fromVersion?: number) {
+    try {
+      peerService.broadcastMessage(
+        makeMessage(
+          'resync_request' as any,
+          { roomId: roomId.value || gameState.value.roomId, fromVersion, reason: initReceived.value ? 'gap' : 'init_missing' } as any,
+          { roomId: roomId.value || gameState.value.roomId, fromId: myPlayerId.value, ts: Date.now() }
+        )
+      )
+    } catch {}
+  }
   const myNickname = ref<string>('')
   const isHost = ref<boolean>(false)
   const hostId = ref<string>('')
@@ -613,6 +707,7 @@ export const useGameStore = defineStore('game', () => {
 
   // Создание комнаты (хост)
   const createRoom = async (nickname: string) => {
+    const ridGuard = startRequest('createRoom')
     try {
       connectionStatus.value = 'connecting'
 
@@ -735,16 +830,19 @@ export const useGameStore = defineStore('game', () => {
       } catch {}
 
       console.log('🏁 Host initialization completed with ID:', restoredPeerId)
+      endRequestSuccess('createRoom', ridGuard)
       return restoredPeerId
 
     } catch (error) {
       connectionStatus.value = 'disconnected'
+      endRequestError('createRoom', ridGuard, normalizeError(error, 'create_room_failed'))
       throw error
     }
   }
 
   // Подключение к комнате (клиент)
   const joinRoom = async (nickname: string, targetHostId: string) => {
+    const ridGuard = startRequest('joinRoom')
     try {
       connectionStatus.value = 'connecting'
 
@@ -821,8 +919,11 @@ export const useGameStore = defineStore('game', () => {
       } catch {}
     } catch (error) {
       connectionStatus.value = 'disconnected'
+      endRequestError('joinRoom', ridGuard, normalizeError(error, 'join_room_failed'))
       throw error
     }
+    // success branch
+    endRequestSuccess('joinRoom', ridGuard)
   }
 
   // Настройка обработчиков сообщений для хоста
@@ -1130,7 +1231,27 @@ export const useGameStore = defineStore('game', () => {
       gameState.value.presence[newPlayer.id] = 'present'
       gameState.value.presenceMeta[newPlayer.id] = { lastSeen: now }
 
-      // Broadcast о присоединении
+      // Перед любыми рассылками синхронизируем phase/gameMode в state
+      gameState.value.phase = gamePhase.value
+      gameMode.value = currentMode.value
+      gameState.value.gameMode = currentMode.value
+
+      // Unicast: сразу отправляем присоединившемуся игроку актуальный снапшот (гарантированный первичный снимок)
+      try {
+        const snapshot = { ...gameState.value }
+        peerService.sendMessage(
+          conn.peer,
+          makeMessage(
+            'game_state_update',
+            snapshot,
+            { roomId: gameState.value.roomId, fromId: gameState.value.hostId, ts: Date.now() }
+          )
+        )
+      } catch (e) {
+        console.warn('Failed to unicast initial snapshot to new player', { peer: conn.peer, error: e })
+      }
+
+      // Broadcast о присоединении (для ARIA/тостов у всех)
       peerService.broadcastMessage(
         makeMessage(
           'user_joined_broadcast',
@@ -1142,6 +1263,47 @@ export const useGameStore = defineStore('game', () => {
       // Отправляем обновленное состояние всем игрокам
       broadcastGameState()
       console.log('Updated players list:', gameState.value.players.map((p: Player) => ({id: p.id, nickname: p.nickname})))
+
+      // Новая авторитетная логика: сразу после join отправим join_ok и snapshot (unicast), сохраняя обратную совместимость
+      try {
+        peerService.sendMessage(
+          conn.peer,
+          makeMessage(
+            'join_ok',
+            {
+              roomId: gameState.value.roomId,
+              hostId: gameState.value.hostId,
+              serverTime: Date.now(),
+              latestVersion: (currentVersion?.value ?? 0)
+            } as any,
+            { roomId: gameState.value.roomId, fromId: gameState.value.hostId, ts: Date.now() }
+          )
+        )
+
+        // Авторитетный версионный снапшот сразу после join_ok (unicast)
+        try {
+          const nowTs = Date.now()
+          peerService.sendMessage(
+            conn.peer,
+            makeMessage(
+              'state_snapshot' as any,
+              {
+                meta: {
+                  roomId: gameState.value.roomId,
+                  version: currentVersion.value || 0,
+                  serverTime: nowTs
+                },
+                state: { ...gameState.value }
+              } as any,
+              { roomId: gameState.value.roomId, fromId: gameState.value.hostId, ts: nowTs }
+            )
+          )
+        } catch (e) {
+          console.warn('Failed to send authoritative state_snapshot to new player', e)
+        }
+      } catch (e) {
+        console.warn('Failed to send join_ok', e)
+      }
     })
 
     peerService.onMessage('light_up_request', (message) => {
@@ -1192,21 +1354,57 @@ export const useGameStore = defineStore('game', () => {
     peerService.onMessage('request_game_state', (message, conn) => {
       if (!conn) return
 
-      console.log('Host sending game state to client:', conn.peer)
+      const req = (message as Extract<PeerMessage, { type: 'request_game_state' }>).payload as any
+      console.log('Host sending game state to client:', conn.peer, 'request:', req, {
+        players: gameState.value.players.map((p: Player) => ({ id: p.id, nickname: p.nickname, isHost: p.isHost })),
+        roomId: gameState.value.roomId,
+        hostId: gameState.value.hostId,
+        phase: (gameState.value.phase ?? gamePhase.value) || 'lobby'
+      })
 
       // Перед отправкой убеждаемся, что phase/gameMode синхронизированы с локальными рефами
       gameState.value.phase = gamePhase.value
       gameState.value.gameMode = gameMode.value
 
-      // Отправляем актуальное состояние игры запросившему клиенту
+      const snapshot = { ...gameState.value }
+
+      // 1) Legacy: отправляем game_state_update (совместимость)
       peerService.sendMessage(
         conn.peer,
         makeMessage(
           'game_state_update',
-          gameState.value,
-          { roomId: gameState.value.roomId, fromId: gameState.value.hostId, ts: Date.now() }
+          snapshot,
+          { roomId: snapshot.roomId, fromId: snapshot.hostId, ts: Date.now() }
         )
       )
+
+      // 2) Авторитетный state_snapshot с версией
+      try {
+        const nowTs = Date.now()
+        peerService.sendMessage(
+          conn.peer,
+          makeMessage(
+            'state_snapshot' as any,
+            {
+              meta: {
+                roomId: snapshot.roomId,
+                version: currentVersion.value || 0,
+                serverTime: nowTs
+              },
+              state: snapshot
+            } as any,
+            { roomId: snapshot.roomId, fromId: snapshot.hostId, ts: nowTs }
+          )
+        )
+        console.log('🔼 Host sent state_snapshot in response to request_game_state to:', conn.peer, {
+          version: currentVersion.value || 0,
+          players: snapshot.players.length,
+          phase: snapshot.phase,
+          roomId: snapshot.roomId
+        })
+      } catch (e) {
+        console.warn('Failed to send authoritative state_snapshot (request_game_state)', e)
+      }
     })
 
     // -------- Игровые сообщения от клиентов к хосту --------
@@ -1446,6 +1644,115 @@ export const useGameStore = defineStore('game', () => {
     peerService.clearMessageHandlers()
     console.log('Cleared old message handlers before setting up client handlers')
 
+    // Перед ожиданием снапшота сбрасываем барьер и включаем таймер фолбэка
+    try {
+      if (_snapshotTimeoutHandle) {
+        clearTimeout(_snapshotTimeoutHandle)
+        _snapshotTimeoutHandle = null
+      }
+      _acceptLegacyAsInit.value = false
+      initReceived.value = false
+      _snapshotTimeoutHandle = window.setTimeout(() => {
+        if (!initReceived.value) {
+          _acceptLegacyAsInit.value = true
+        }
+      }, SNAPSHOT_TIMEOUT_MS)
+    } catch {}
+
+    // Versioned sync handlers (prioritized)
+    peerService.onMessage('state_snapshot', (message) => {
+      if (isHost.value) return
+      const payload = (message as Extract<PeerMessage, { type: 'state_snapshot' }>).payload as any
+      const meta = payload?.meta
+      console.log('📥 CLIENT received state_snapshot:', {
+        meta,
+        hasRoom: !!gameState.value.roomId,
+        currentRoom: gameState.value.roomId || '(empty)',
+        incomingRoom: meta?.roomId,
+        playersInPayload: Array.isArray(payload?.state?.players) ? payload.state.players.length : -1,
+        phase: payload?.state?.phase
+      })
+      if (!meta || (gameState.value.roomId && meta.roomId !== gameState.value.roomId)) {
+        console.warn('state_snapshot ignored due to room mismatch or missing meta')
+        return
+      }
+      // Snapshot barrier: применяем целиком
+      const incoming = { ...(payload.state || {}) }
+      // Защита: синхронизируем ключевые поля
+      if (incoming.hostId && !incoming.players?.some((p: Player) => p.id === incoming.hostId)) {
+        console.warn('Snapshot hostId not found among players, will keep as-is but UI may not highlight host')
+      }
+      gameState.value = incoming
+      // Дублируем в локальные вспомогательные поля
+      hostId.value = incoming.hostId || hostId.value
+      roomId.value = incoming.roomId || roomId.value
+
+      currentVersion.value = typeof meta.version === 'number' ? meta.version : 0
+      lastServerTime.value = Math.max(lastServerTime.value, meta.serverTime || Date.now())
+      initReceived.value = true
+
+      console.log('✅ CLIENT applied snapshot:', {
+        players: gameState.value.players.length,
+        myPlayerId: myPlayerId.value,
+        hostId: hostId.value,
+        roomId: roomId.value,
+        phase: gameState.value.phase
+      })
+
+      // Очищаем таймер ожидания снапшота и сбрасываем легаси-флаг
+      if (_snapshotTimeoutHandle) {
+        clearTimeout(_snapshotTimeoutHandle)
+        _snapshotTimeoutHandle = null
+      }
+      _acceptLegacyAsInit.value = false
+
+      // Drain buffered diffs
+      drainPending()
+      // Ack
+      sendAck(currentVersion.value)
+    })
+
+    peerService.onMessage('state_diff', (message) => {
+      if (isHost.value) return
+      const payload = (message as Extract<PeerMessage, { type: 'state_diff' }>).payload as any
+      const meta = payload?.meta
+      console.log('📥 CLIENT received state_diff:', {
+        meta,
+        hasInit: initReceived.value,
+        currentVersion: currentVersion.value
+      })
+      if (!meta || (gameState.value.roomId && meta.roomId !== gameState.value.roomId)) {
+        console.warn('state_diff ignored due to room mismatch or missing meta')
+        return
+      }
+      if (!initReceived.value) {
+        // buffer until snapshot
+        if (typeof meta.version === 'number') {
+          pendingDiffs.value.set(meta.version, payload)
+          console.log('Buffered diff before init, version:', meta.version)
+        }
+        return
+      }
+      // Gap detection
+      const expected = (currentVersion.value || 0) + 1
+      if (meta.version !== expected) {
+        console.warn('Diff version gap detected, expected:', expected, 'got:', meta.version)
+        if (typeof meta.version === 'number') pendingDiffs.value.set(meta.version, payload)
+        // request resync if we see jump ahead without pending chain
+        requestResync(currentVersion.value)
+        return
+      }
+      // Apply
+      applyDiff(payload.patch)
+      currentVersion.value = meta.version
+      lastServerTime.value = Math.max(lastServerTime.value, meta.serverTime || Date.now())
+      console.log('✅ CLIENT applied diff:', { newVersion: currentVersion.value })
+      // Drain any consecutive buffered diffs
+      drainPending()
+      // Ack
+      sendAck(currentVersion.value)
+    })
+
     // Клиентские уведомления о присутствии
     peerService.onMessage('user_joined_broadcast', (message) => {
       const { userId, roomId: rid, timestamp } = (message as Extract<PeerMessage, { type: 'user_joined_broadcast' }>).payload as any
@@ -1504,6 +1811,27 @@ export const useGameStore = defineStore('game', () => {
       if (isHost.value) return
 
       const newState = { ...(message as Extract<PeerMessage, { type: 'game_state_update' }>).payload }
+      console.log('📥 CLIENT received game_state_update:', {
+        players: Array.isArray(newState.players) ? newState.players.map((p: Player) => ({ id: p.id, nick: p.nickname })) : [],
+        hostId: newState.hostId,
+        roomId: newState.roomId,
+        phase: newState.phase
+      })
+
+      // Fallback инициализация: если не получили авторитетный снапшот вовремя,
+      // принимаем первый legacy апдейт как первичный снимок
+      if (!initReceived.value && _acceptLegacyAsInit.value) {
+        gameState.value = newState
+        currentVersion.value = 0
+        lastServerTime.value = Date.now()
+        initReceived.value = true
+        if (_snapshotTimeoutHandle) {
+          clearTimeout(_snapshotTimeoutHandle)
+          _snapshotTimeoutHandle = null
+        }
+        _acceptLegacyAsInit.value = false
+        console.log('🆗 CLIENT accepted legacy game_state_update as initial snapshot (timeout fallback)')
+      }
 
       // Немедленно кешируем снапшот состояния, полученный от хоста,
       // чтобы после перезагрузки не «проваливаться» в лобби.
@@ -1547,7 +1875,18 @@ export const useGameStore = defineStore('game', () => {
       // Отметим, что получили свежее состояние — можно останавливать ретраи
       try { gotFreshState.value = true } catch {}
 
+      // Синхронизация критичных полей в локальные refs
+      if (newState.hostId) hostId.value = newState.hostId
+      if (newState.roomId) roomId.value = newState.roomId
+
       gameState.value = newState
+
+      console.log('✅ CLIENT applied game_state_update:', {
+        players: gameState.value.players.length,
+        hostId: hostId.value,
+        roomId: roomId.value,
+        phase: gameState.value.phase
+      })
     })
 
     peerService.onMessage('player_id_updated', (message) => {
@@ -2876,8 +3215,12 @@ export const useGameStore = defineStore('game', () => {
 
   // Универсальное восстановление состояния из сохраненной сессии
   const restoreSession = async (): Promise<boolean> => {
+    const ridGuard = startRequest('restoreSession')
     const sessionData = loadSession()
-    if (!sessionData) return false
+    if (!sessionData) {
+      endRequestError('restoreSession', ridGuard, normalizeError('No session', 'restore_no_session'))
+      return false
+    }
 
     try {
       console.log('Attempting to restore session...')
@@ -2976,6 +3319,7 @@ export const useGameStore = defineStore('game', () => {
       restorationState.value = 'idle'
       connectionStatus.value = 'connected'
       console.log('Session successfully restored')
+      endRequestSuccess('restoreSession', ridGuard)
       return true
     } catch (error: unknown) {
       if (error instanceof Error) {
@@ -2985,6 +3329,7 @@ export const useGameStore = defineStore('game', () => {
       }
       restorationState.value = 'idle'
       connectionStatus.value = 'disconnected'
+      endRequestError('restoreSession', ridGuard, normalizeError(error, 'restore_failed'))
       clearSession()
       return false
     }
@@ -3525,9 +3870,20 @@ export const useGameStore = defineStore('game', () => {
 
           console.log('Game state synchronized (fast), players:', gameState.value.players.length,
             'phase:', gameState.value.phase,
-            'litUpPlayerId:', gameState.value.litUpPlayerId)
+            'litUpPlayerId:', gameState.value.litUpPlayerId,
+            'hostId:', gameState.value.hostId,
+            'roomId:', gameState.value.roomId)
           resolve()
         } else {
+          if (attempts === Math.floor(maxAttempts / 2)) {
+            console.log('⏳ Waiting for state sync...', {
+              attempts,
+              players: gameState.value.players.length,
+              phase: gameState.value.phase,
+              hostId: gameState.value.hostId,
+              roomId: gameState.value.roomId
+            })
+          }
           setTimeout(checkForUpdate, 150) // быстрее цикл
         }
       }
@@ -3964,6 +4320,14 @@ export const useGameStore = defineStore('game', () => {
     restoreSession,
     hasActiveSession,
     clearSession,
-    generateDefaultNickname
+    generateDefaultNickname,
+
+    // Request guard UI flags
+    isLoadingCreateRoom,
+    isLoadingJoinRoom,
+    isLoadingRestore,
+    lastErrorCreateRoom,
+    lastErrorJoinRoom,
+    lastErrorRestore
   }
 })
