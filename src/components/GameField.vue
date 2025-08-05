@@ -127,15 +127,15 @@
 
         <div class="bet-cards">
           <button
-            v-for="b in ['0','+-','+']"
+            v-for="b in ['0','±','+']"
             :key="b"
             :disabled="alreadyBet"
-            :class="['bet-chip', { selected: bet === b, 'bet-plus': b === '+', 'bet-plusminus': b === '+-', 'bet-zero': b === '0' }]"
+            :class="['bet-chip', { selected: bet === b, 'bet-plus': b === '+', 'bet-plusminus': b === '±', 'bet-zero': b === '0' }]"
             @click="bet = b as any"
             :title="'Ставка: ' + b"
           >
             <span class="bet-sign"
-                  :class="{'bet-plus': b === '+', 'bet-plusminus': b === '+-', 'bet-zero': b === '0'}">{{
+                  :class="{'bet-plus': b === '+', 'bet-plusminus': b === '±', 'bet-zero': b === '0'}">{{
                 b
               }}</span>
           </button>
@@ -386,6 +386,16 @@
           <p class="instruction">
             Режим: {{ gameMode }} • Фаза: {{ phaseLabel }}
           </p>
+
+          <!-- Debug panel -->
+          <div class="debug-panel">
+            <div class="debug-actions">
+              <button class="btn-secondary" @click="copyDebug">Copy Debug</button>
+              <span v-if="copiedOk" class="copy-status">Скопировано</span>
+              <span v-else class="copy-hint">Снимок состояния ниже</span>
+            </div>
+            <pre class="debug-pre">{{ debugJson }}</pre>
+          </div>
         </div>
       </div>
     </div>
@@ -463,6 +473,43 @@ import {useGameStore} from '@/stores/gameStore'
 const router = useRouter()
 const gameStore = useGameStore()
 
+// Debug panel state
+const copiedOk = ref(false)
+const debugPayload = computed(() => {
+  // Берём минимально запрошенный срез
+  return {
+    state: gameStore.gameState,
+    peers: gameStore.peerService?.getActiveConnections
+      ? gameStore.peerService.getActiveConnections()
+      : [],
+    allKnownPeers: gameStore.peerService?.getAllKnownPeers
+      ? gameStore.peerService.getAllKnownPeers()
+      : [],
+    role: gameStore.peerService?.getCurrentRole
+      ? gameStore.peerService.getCurrentRole()
+      : (gameStore.isHost ? 'host' : 'client'),
+    myId: (gameStore.myPlayerId as string) || '',
+    roomId: (gameStore.gameState.roomId as string) || ''
+  }
+})
+const debugJson = computed(() => {
+  try {
+    return JSON.stringify(debugPayload.value, null, 2)
+  } catch (e) {
+    return 'Failed to stringify debug payload'
+  }
+})
+async function copyDebug() {
+  try {
+    await navigator.clipboard.writeText(debugJson.value)
+    copiedOk.value = true
+    setTimeout(() => (copiedOk.value = false), 1200)
+  } catch (e) {
+    copiedOk.value = false
+    console.error('[Debug] Clipboard write failed', e)
+  }
+}
+
 // Popup правил
 const showRules = ref(false)
 
@@ -492,7 +539,7 @@ const currentTurnName = computed(() => players.value.find(p => p.id === currentT
 // Данные раундов
 const currentQuestion = computed(() => gameStore.gameState.currentQuestion as string | null | undefined)
 const votes = computed<Record<string, string[]>>(() => (gameStore.gameState.votes || {}) as Record<string, string[]>)
-const bets = computed<Record<string, '0' | '+-' | '+'>>(() => (gameStore.gameState.bets || {}) as Record<string, '0' | '+-' | '+'>)
+const bets = computed<Record<string, '0' | '±' | '+'>>(() => (gameStore.gameState.bets || {}) as Record<string, '0' | '±' | '+'>)
 const scores = computed<Record<string, number>>(() => (gameStore.gameState.scores || {}) as Record<string, number>)
 const roundScores = computed<Record<string, number>>(() => (gameStore.gameState.roundScores || {}) as Record<string, number>)
 const guesses = computed<Record<string, string>>(() => (gameStore.gameState.guesses || {}) as Record<string, string>)
@@ -551,7 +598,7 @@ const advancedAnswer = computed(() => (gameStore.gameState.advancedAnswer || '')
 
 // Локальные состояния
 const selectedVotes = ref<string[]>([])
-const bet = ref<'0' | '+-' | '+' | null>(null)
+const bet = ref<'0' | '±' | '+' | null>(null)
 const answer = ref('')
 const guess = ref('')
 
@@ -829,6 +876,39 @@ watch([() => gameStore.gameState.gameStarted, myId], ([started, id]: [boolean | 
 .room-code strong {
   color: #333;
   font-family: monospace;
+}
+
+/* Debug panel */
+.debug-panel {
+  margin-top: 10px;
+  text-align: left;
+  background: #fff;
+  border: 1px dashed #cbd5e1;
+  border-radius: 10px;
+  padding: 8px;
+}
+.debug-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.copy-status {
+  color: #166534;
+  font-weight: 700;
+}
+.copy-hint {
+  color: #64748b;
+}
+.debug-pre {
+  margin: 0;
+  max-height: 180px;
+  overflow: auto;
+  background: #0b1020;
+  color: #d1e7ff;
+  border-radius: 8px;
+  padding: 8px;
+  font-size: 12px;
 }
 
 .instruction {

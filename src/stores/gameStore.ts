@@ -34,20 +34,114 @@ import {
  * - SESSION_STORAGE_KEY: локальная сессия игрока
  * - HOST_STATE_STORAGE_KEY: снапшот состояния игры от хоста
  */
-const SESSION_STORAGE_KEY = 'gameSessionData'
-const HOST_STATE_STORAGE_KEY = 'hostGameStateSnapshot'
-const ROOM_ID_STORAGE_KEY = 'persistentRoomId'
+const GAME_PREFIX = '__game_'
+const SESSION_STORAGE_KEY = `${GAME_PREFIX}sessionData`
+const HOST_STATE_STORAGE_KEY = `${GAME_PREFIX}hostStateSnapshot`
+const ROOM_ID_STORAGE_KEY = `${GAME_PREFIX}roomId`
 const SESSION_TIMEOUT = 30 * 60 * 1000 // 30 минут
+
+// ---------- Request guards & standardized errors ----------
+type RequestKey = 'createRoom' | 'joinRoom' | 'restoreSession'
+type RequestStatus = 'idle' | 'pending' | 'success' | 'error'
+type RequestMap = Record<RequestKey, {
+  status: RequestStatus
+  requestId: number
+  error: StandardError | null
+}>
+interface StandardError {
+  code?: string
+  message: string
+  details?: unknown
+  at: number
+}
+
+// last-write-wins счетчик
+const requestSeq = ref(0)
+const requests = ref<RequestMap>({
+  createRoom: { status: 'idle', requestId: 0, error: null },
+  joinRoom: { status: 'idle', requestId: 0, error: null },
+  restoreSession: { status: 'idle', requestId: 0, error: null }
+})
+
+function normalizeError(e: unknown, code?: string): StandardError {
+  if (e && typeof e === 'object' && 'message' in e) {
+    return {
+      code,
+      message: String((e as any).message ?? 'Unknown error'),
+      details: e,
+      at: Date.now()
+    }
+  }
+  return {
+    code,
+    message: typeof e === 'string' ? e : 'Unknown error',
+    details: e,
+    at: Date.now()
+  }
+}
+
+function startRequest(key: RequestKey): number {
+  const id = ++requestSeq.value
+  const entry = requests.value[key]
+  entry.status = 'pending'
+  entry.requestId = id
+  entry.error = null
+  return id
+}
+
+function endRequestSuccess(key: RequestKey, id: number) {
+  const entry = requests.value[key]
+  if (entry.requestId !== id) return // устаревший
+  entry.status = 'success'
+}
+
+function endRequestError(key: RequestKey, id: number, err: StandardError) {
+  const entry = requests.value[key]
+  if (entry.requestId !== id) return // устаревший
+  entry.status = 'error'
+  entry.error = err
+}
+
+// Удобные computed для UI
+const isLoadingCreateRoom = computed(() => requests.value.createRoom.status === 'pending')
+const isLoadingJoinRoom = computed(() => requests.value.joinRoom.status === 'pending')
+const isLoadingRestore = computed(() => requests.value.restoreSession.status === 'pending')
+const lastErrorCreateRoom = computed(() => requests.value.createRoom.error)
+const lastErrorJoinRoom = computed(() => requests.value.joinRoom.error)
+const lastErrorRestore = computed(() => requests.value.restoreSession.error)
 
 interface SessionData extends ExtendedSessionData {
   // Наследуем все поля от ExtendedSessionData для совместимости
 }
 
 export const useGameStore = defineStore('game', () => {
+  // ---------- LocalStorage utils with game prefix ----------
+  const isGameKey = (key: string) => key.startsWith(GAME_PREFIX)
+  const setGameItem = (key: string, value: string) => {
+    try { localStorage.setItem(`${GAME_PREFIX}${key}`, value) } catch {}
+  }
+  const getGameItem = (key: string): string | null => {
+    try { return localStorage.getItem(`${GAME_PREFIX}${key}`) } catch { return null }
+  }
+  const removeGameItemsByPrefix = (prefix: string = GAME_PREFIX) => {
+    try {
+      const toRemove: string[] = []
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i)
+        if (k && k.startsWith(prefix)) toRemove.push(k)
+      }
+      toRemove.forEach(k => localStorage.removeItem(k))
+    } catch {}
+  }
+  // Никнейм хранится БЕЗ префикса по требованию
+  const NICKNAME_STORAGE_KEY = 'savedNickname'
+  const setNickname = (nick: string) => { try { localStorage.setItem(NICKNAME_STORAGE_KEY, nick) } catch {} }
+  const getNickname = (): string | null => { try { return localStorage.getItem(NICKNAME_STORAGE_KEY) } catch { return null } }
+  const clearNickname = () => { try { localStorage.removeItem(NICKNAME_STORAGE_KEY) } catch {} }
 
   // Game mechanics for "Провокатор"
   // Структура голосов: { [voterId]: [targetId, targetId] }
-  // Структура ставок: { [playerId]: '0' | '+-' | '+' }
+  // Структура ставок: { [playerId]: '0' | '±' | '+' }
   // Структура очков: { [playerId]: number }
 
   // Режим игры: 'basic' — обычный, 'advanced' — 2.0 (с письменными ответами)
@@ -85,7 +179,7 @@ export const useGameStore = defineStore('game', () => {
     gameState.value.scores = {}
     gameState.value.players.forEach((player) => {
       player.votingCards = ['Голос 1', 'Голос 2']
-      player.bettingCards = ['0', '+-', '+']
+      player.bettingCards = ['0', '±', '+']
       gameState.value.scores[player.id] = 0
     })
 
@@ -153,7 +247,7 @@ export const useGameStore = defineStore('game', () => {
         add = votes
       } else if (votes === 0 && bet === '0') {
         add = 1
-      } else if (bet === '+-' && votes > 0 && !leaders.includes(pid)) {
+      } else if (bet === '±' && votes > 0 && !leaders.includes(pid)) {
         add = 1
       }
       gameState.value.scores[pid] = (gameState.value.scores[pid] || 0) + add
@@ -233,8 +327,8 @@ export const useGameStore = defineStore('game', () => {
     broadcastGameState()
   }
 
-  // Игрок делает ставку: bet — '0' | '+-' | '+'
-  const submitBet = (playerId: string, bet: '0' | '+-' | '+') => {
+  // Игрок делает ставку: bet — '0' | '±' | '+'
+  const submitBet = (playerId: string, bet: '0' | '±' | '+') => {
     if (gamePhase.value !== 'betting') return
     if (!gameState.value.bets) gameState.value.bets = {}
 
@@ -318,7 +412,7 @@ export const useGameStore = defineStore('game', () => {
         // Обновляем карты на руках (если нужно)
         gameState.value.players.forEach((player) => {
           player.votingCards = ['Голос 1', 'Голос 2']
-          player.bettingCards = ['0', '+-', '+']
+          player.bettingCards = ['0', '±', '+']
         })
 
         broadcastGameState()
@@ -522,6 +616,11 @@ export const useGameStore = defineStore('game', () => {
     try {
       connectionStatus.value = 'connecting'
 
+      // Перед созданием комнаты: очистить все старые игровые записи
+      removeGameItemsByPrefix(GAME_PREFIX)
+      // Ник сохраняем без префикса
+      setNickname(nickname)
+
       // КРИТИЧНО: Всегда пытаемся восстановить хоста с существующим ID
       const existingSession = loadSession()
       let restoredPeerId: string
@@ -611,7 +710,7 @@ export const useGameStore = defineStore('game', () => {
           joinedAt: now,
           authToken: generateAuthToken(restoredPeerId, targetRoomId, now),
           votingCards: ['Голос 1', 'Голос 2'],
-          bettingCards: ['0', '+-', '+']
+          bettingCards: ['0', '±', '+']
         }
 
         gameState.value.players = [hostPlayer]
@@ -628,6 +727,13 @@ export const useGameStore = defineStore('game', () => {
       // Сохраняем roomId для последующих перезагрузок
       savePersistentRoomId(targetRoomId)
 
+      // Сохраняем свежие игровые записи
+      try {
+        localStorage.setItem(`${GAME_PREFIX}isHost`, JSON.stringify(true))
+        localStorage.setItem(`${GAME_PREFIX}hostId`, restoredPeerId)
+        localStorage.setItem(`${GAME_PREFIX}roomId`, targetRoomId)
+      } catch {}
+
       console.log('🏁 Host initialization completed with ID:', restoredPeerId)
       return restoredPeerId
 
@@ -642,29 +748,48 @@ export const useGameStore = defineStore('game', () => {
     try {
       connectionStatus.value = 'connecting'
 
+      // Перед входом в комнату: очистить все старые игровые записи
+      removeGameItemsByPrefix(GAME_PREFIX)
+      // Ник сохраняем без префикса
+      setNickname(nickname)
+
+      // 1) Подключаемся к хосту
       await peerService.connectToHost(targetHostId)
 
+      // 2) Инициализируем локальные поля
       myNickname.value = nickname
       hostId.value = targetHostId
       myPlayerId.value = peerService.getMyId() || ''
 
-      // Устанавливаем роль клиента
+      // 3) Устанавливаем роль клиента и СРАЗУ вешаем обработчики,
+      //    чтобы не потерять первое game_state_update от хоста
       peerService.setAsClient()
+      setupClientMessageHandlers()
 
-      // Отправляем запрос на подключение
+      // 4) Отправляем join_request (с сохраненным ID для ремапа)
       peerService.sendMessage(
         targetHostId,
         makeMessage(
           'join_request',
           {
             nickname,
-            savedPlayerId: myPlayerId.value // КРИТИЧНО: передаем ID для отслеживания переподключений
+            savedPlayerId: myPlayerId.value
           },
-          { roomId: roomId.value || '', fromId: myPlayerId.value, ts: Date.now() } as MessageMeta
+          { roomId: roomId.value || gameState.value.roomId || '', fromId: myPlayerId.value, ts: Date.now() } as MessageMeta
         )
       )
 
-      // КРИТИЧНО: Сразу запрашиваем список всех игроков для mesh-подключения
+      // 5) Идемпотентный запрос актуального состояния, чтобы гарантированно получить список игроков
+      peerService.sendMessage(
+        targetHostId,
+        makeMessage(
+          'request_game_state',
+          { requesterId: myPlayerId.value },
+          { roomId: roomId.value || gameState.value.roomId || '', fromId: myPlayerId.value, ts: Date.now() }
+        )
+      )
+
+      // 6) Запрашиваем peer‑лист для mesh
       peerService.sendMessage(
         targetHostId,
         makeMessage(
@@ -674,12 +799,26 @@ export const useGameStore = defineStore('game', () => {
             requesterToken: '',
             timestamp: Date.now()
           },
-          { roomId: roomId.value || '', fromId: myPlayerId.value, ts: Date.now() }
+          { roomId: roomId.value || gameState.value.roomId || '', fromId: myPlayerId.value, ts: Date.now() }
         )
       )
 
+      // 7) Дожидаемся быстрого обновления состояния (используем уже существующую утилиту)
+      try {
+        await waitForGameStateUpdate()
+      } catch {}
+
+      // 8) Теперь считаем соединение установленным
       connectionStatus.value = 'connected'
-      setupClientMessageHandlers()
+
+      // Сохраняем свежие игровые записи
+      try {
+        localStorage.setItem(`${GAME_PREFIX}isHost`, JSON.stringify(false))
+        localStorage.setItem(`${GAME_PREFIX}hostId`, targetHostId)
+        // roomId придёт из состояния; если уже известен — сохраним
+        const rid = roomId.value || gameState.value.roomId
+        if (rid) localStorage.setItem(`${GAME_PREFIX}roomId`, rid)
+      } catch {}
     } catch (error) {
       connectionStatus.value = 'disconnected'
       throw error
@@ -693,6 +832,74 @@ export const useGameStore = defineStore('game', () => {
     // КРИТИЧНО: Очищаем старые обработчики перед настройкой новых
     peerService.clearMessageHandlers()
     console.log('Cleared old message handlers before setting up host handlers')
+
+    // Обработчик явного выхода игрока: user_left_room
+    peerService.onMessage('user_left_room', (message, conn) => {
+      if (!isHost.value) return
+      const typed = message as Extract<PeerMessage, { type: 'user_left_room' }>
+      const { userId, roomId: rid, timestamp, currentScore, reason } = typed.payload
+
+      // Валидация комнаты
+      if (rid && gameState.value.roomId && rid !== gameState.value.roomId) {
+        console.log('❌ Ignoring user_left_room for different room', { rid, current: gameState.value.roomId })
+        return
+      }
+
+      // Игрок должен существовать
+      const playerExists = gameState.value.players.some((p: Player) => p.id === userId)
+      if (!playerExists) {
+        console.log('❌ Ignoring user_left_room - player not found:', userId)
+        return
+      }
+
+      // Инициализация контейнеров присутствия при необходимости
+      if (!gameState.value.presence) gameState.value.presence = {}
+      if (!gameState.value.presenceMeta) gameState.value.presenceMeta = {}
+
+      // Идемпотентность: если уже absent с той же причиной и leftAt не меньше — игнорируем
+      const alreadyAbsent = gameState.value.presence[userId] === 'absent'
+      const prevMeta = gameState.value.presenceMeta[userId]
+      if (alreadyAbsent && prevMeta?.leftAt && prevMeta.leftAt >= timestamp) {
+        console.log('ℹ️ Duplicate/older user_left_room ignored for', userId)
+        return
+      }
+
+      // Обновляем счет, если передан (не сбрасываем очки)
+      if (typeof currentScore === 'number') {
+        gameState.value.scores[userId] = currentScore
+      } else {
+        // Гарантируем, что счет существует
+        if (gameState.value.scores[userId] === undefined) {
+          gameState.value.scores[userId] = 0
+        }
+      }
+
+      // Отмечаем отсутствие
+      gameState.value.presence[userId] = 'absent'
+      gameState.value.presenceMeta[userId] = {
+        lastSeen: Math.max(prevMeta?.lastSeen || 0, timestamp),
+        leftAt: timestamp,
+        reason: reason || 'explicit_leave'
+      }
+
+      // Если текущий ход у вышедшего — не меняем принудительно хода здесь, UI должен блокировать действия отсутствующего
+
+      // Рассылаем broadcast об уходе (для ARIA/тостов на клиентах)
+      const leftBroadcast = makeMessage(
+        'user_left_broadcast',
+        {
+          userId,
+          roomId: gameState.value.roomId,
+          timestamp: Date.now(),
+          reason: reason || 'explicit_leave'
+        },
+        { roomId: gameState.value.roomId, fromId: gameState.value.hostId, ts: Date.now() }
+      )
+      peerService.broadcastMessage(leftBroadcast)
+
+      // Обновляем основное состояние игры для всех
+      broadcastGameState()
+    })
 
     peerService.onMessage('join_request', (message, conn) => {
       console.log('Host received join_request:', {
@@ -796,7 +1003,7 @@ export const useGameStore = defineStore('game', () => {
 
         // 5) bets (ключи)
         if (gameState.value.bets) {
-          const newBets: Record<string, '0' | '+-' | '+'> = {}
+          const newBets: Record<string, '0' | '±' | '+'> = {}
           Object.entries(gameState.value.bets).forEach(([k, v]) => {
             const mappedKey = k === oldId ? newId : k
             newBets[mappedKey] = v
@@ -855,6 +1062,27 @@ export const useGameStore = defineStore('game', () => {
           totalPlayers: gameState.value.players.length
         })
 
+        // Presence: помечаем игрока как present при успешном ремапе
+        const nowTs = Date.now()
+        if (!gameState.value.presence) gameState.value.presence = {}
+        if (!gameState.value.presenceMeta) gameState.value.presenceMeta = {}
+        gameState.value.presence[newId] = 'present'
+        gameState.value.presenceMeta[newId] = {
+          lastSeen: Math.max(nowTs, gameState.value.presenceMeta[newId]?.lastSeen || 0)
+        }
+        // Чистим возможные старые метки отсутствия
+        delete (gameState.value.presenceMeta[newId] as any).leftAt
+        delete (gameState.value.presenceMeta[newId] as any).reason
+
+        // Broadcast о присоединении (для ARIA/тостов)
+        peerService.broadcastMessage(
+          makeMessage(
+            'user_joined_broadcast',
+            { userId: newId, roomId: gameState.value.roomId, timestamp: nowTs },
+            { roomId: gameState.value.roomId, fromId: gameState.value.hostId, ts: nowTs }
+          )
+        )
+
         broadcastGameState()
 
         // КРИТИЧНО: Отправляем специальное сообщение клиенту о смене его ID
@@ -890,11 +1118,26 @@ export const useGameStore = defineStore('game', () => {
         joinedAt: now,
         authToken: generateAuthToken(conn.peer, gameState.value.roomId, now),
         votingCards: ['Карточка 1', 'Карточка 2'],
-        bettingCards: ['0', '+-', '+']
+        bettingCards: ['0', '±', '+']
       }
 
       console.log('Adding new player:', newPlayer)
       gameState.value.players.push(newPlayer)
+
+      // Presence: инициализация как present для нового игрока
+      if (!gameState.value.presence) gameState.value.presence = {}
+      if (!gameState.value.presenceMeta) gameState.value.presenceMeta = {}
+      gameState.value.presence[newPlayer.id] = 'present'
+      gameState.value.presenceMeta[newPlayer.id] = { lastSeen: now }
+
+      // Broadcast о присоединении
+      peerService.broadcastMessage(
+        makeMessage(
+          'user_joined_broadcast',
+          { userId: newPlayer.id, roomId: gameState.value.roomId, timestamp: now },
+          { roomId: gameState.value.roomId, fromId: gameState.value.hostId, ts: now }
+        )
+      )
 
       // Отправляем обновленное состояние всем игрокам
       broadcastGameState()
@@ -1085,7 +1328,7 @@ export const useGameStore = defineStore('game', () => {
 
       const payload = (message as Extract<PeerMessage, { type: 'submit_bet' }>).payload
       const playerId = (payload as any).playerId as string | undefined
-      const bet = (payload as any).bet as ('0' | '+-' | '+') | undefined
+      const bet = (payload as any).bet as ('0' | '±' | '+') | undefined
 
       if (!playerId || !bet) return
 
@@ -1203,6 +1446,59 @@ export const useGameStore = defineStore('game', () => {
     peerService.clearMessageHandlers()
     console.log('Cleared old message handlers before setting up client handlers')
 
+    // Клиентские уведомления о присутствии
+    peerService.onMessage('user_joined_broadcast', (message) => {
+      const { userId, roomId: rid, timestamp } = (message as Extract<PeerMessage, { type: 'user_joined_broadcast' }>).payload as any
+      if (!gameState.value.presence) gameState.value.presence = {}
+      if (!gameState.value.presenceMeta) gameState.value.presenceMeta = {}
+      gameState.value.presence[userId] = 'present'
+      gameState.value.presenceMeta[userId] = {
+        lastSeen: Math.max(timestamp || Date.now(), gameState.value.presenceMeta[userId]?.lastSeen || 0)
+      }
+      // Здесь позже будет UI: ARIA-live/тосты
+    })
+
+    peerService.onMessage('user_left_broadcast', (message) => {
+      const { userId, roomId: rid, timestamp, reason } = (message as Extract<PeerMessage, { type: 'user_left_broadcast' }>).payload as any
+      if (!gameState.value.presence) gameState.value.presence = {}
+      if (!gameState.value.presenceMeta) gameState.value.presenceMeta = {}
+      // Идемпотентно помечаем отсутствующим
+      const ts = timestamp || Date.now()
+      const prevMeta = gameState.value.presenceMeta[userId]
+      const alreadyAbsent = gameState.value.presence?.[userId] === 'absent' && prevMeta?.leftAt && prevMeta.leftAt >= ts
+      if (!alreadyAbsent) {
+        gameState.value.presence[userId] = 'absent'
+        gameState.value.presenceMeta[userId] = {
+          lastSeen: Math.max(ts, prevMeta?.lastSeen || 0),
+          leftAt: ts,
+          reason: reason || 'explicit_leave'
+        }
+      }
+      // ARIA уведомление
+      ariaAnnounce('Пользователь покинул комнату')
+    })
+
+    // Подписка на восстановление исходного хоста во время grace-period
+    try {
+      peerService.onHostRecovered(() => {
+        console.log('🎉 onHostRecovered: Original host is back, cancelling migration/grace and marking connected')
+        // Отменяем Grace-period если активен
+        try {
+          if (peerService.isInHostRecoveryGracePeriod()) {
+            peerService.cancelHostRecoveryGracePeriod()
+          }
+        } catch {}
+        // Сбрасываем состояние миграции, если что-то шло
+        if (migrationState.value.inProgress) {
+          resetMigrationState()
+        }
+        // Ставим статус connected — дальнейшая синхронизация придет через heartbeat/game_state_update
+        connectionStatus.value = 'connected'
+      })
+    } catch (e) {
+      console.warn('Failed to subscribe to onHostRecovered (non-critical):', e)
+    }
+
     peerService.onMessage('game_state_update', (message) => {
       // Защита: принимаем только если мы клиент (у хоста истина в локальном состоянии)
       if (isHost.value) return
@@ -1219,6 +1515,12 @@ export const useGameStore = defineStore('game', () => {
       } catch (e) {
         console.warn('Failed to cache host snapshot on client', e)
       }
+      // Обновим roomId в игровых записях
+      try {
+        if (newState?.roomId) {
+          localStorage.setItem(`${GAME_PREFIX}roomId`, newState.roomId)
+        }
+      } catch {}
 
       // КРИТИЧНО: Валидируем litUpPlayerId при получении обновления состояния
       if (newState.litUpPlayerId) {
@@ -1241,6 +1543,9 @@ export const useGameStore = defineStore('game', () => {
           console.log('✅ litUpPlayerId is valid, keeping it:', newState.litUpPlayerId)
         }
       }
+
+      // Отметим, что получили свежее состояние — можно останавливать ретраи
+      try { gotFreshState.value = true } catch {}
 
       gameState.value = newState
     })
@@ -1395,7 +1700,17 @@ export const useGameStore = defineStore('game', () => {
     const originalHostId = gameState.value.hostId
     connectionStatus.value = 'connecting'
 
-    // Простая логика: пытаемся переподключиться к тому же хосту
+    // Запускаем grace period восстановления исходного хоста
+    try {
+      peerService.startHostRecoveryGracePeriod(originalHostId, () => {
+        console.log('⏰ Grace period ended — proceeding with migration flow')
+        proceedWithMigrationAfterGracePeriod(originalHostId)
+      })
+    } catch (e) {
+      console.warn('Failed to start host recovery grace period (non-critical):', e)
+    }
+
+    // Параллельно пытаемся переподключиться к тому же хосту
     await attemptReconnectionToHost(originalHostId)
   }
 
@@ -1463,6 +1778,13 @@ export const useGameStore = defineStore('game', () => {
         }
       }
     }
+
+    // Если успешно переподключились ранее — отменяем grace period
+    try {
+      if (connectionStatus.value === 'connected') {
+        peerService.cancelHostRecoveryGracePeriod()
+      }
+    } catch {}
 
     // Все попытки неудачны
     console.log('❌ All reconnection attempts failed. Host is likely permanently disconnected.')
@@ -1820,7 +2142,12 @@ export const useGameStore = defineStore('game', () => {
   }
 
   // Запуск безопасной миграции
+  // BUGFIX: защита от повторного запуска миграции, если уже идет процесс
   const startSecureMigration = async (validPlayers: Player[]) => {
+    if (migrationState.value.inProgress) {
+      console.log('Migration already in progress, skip startSecureMigration')
+      return
+    }
     console.log('Starting secure migration with players:', validPlayers.map(p => p.id))
 
     migrationState.value.inProgress = true
@@ -2147,6 +2474,7 @@ export const useGameStore = defineStore('game', () => {
     const newPeerId = await peerService.createHost(roomId.value)
 
     // Уведомляем всех о новом ID
+    // BUGFIX: отправляем сначала new_host_id через старые соединения, а затем обновляем локальные ID
     const newHostMessage: NewHostIdPayload = {
       oldHostId: oldId,
       newHostId: newPeerId,
@@ -2171,10 +2499,7 @@ export const useGameStore = defineStore('game', () => {
       gameState.value.players[myPlayerIndex].id = newPeerId
     }
 
-    // Запускаем heartbeat
-    peerService.setRoomContext(roomId.value || gameState.value.roomId || null as any)
-    peerService.setAsHost(newPeerId, roomId.value || gameState.value.roomId)
-    // Запускаем heartbeat
+    // Запускаем heartbeat (убраны дубли)
     peerService.setRoomContext(roomId.value || gameState.value.roomId || null as any)
     peerService.setAsHost(newPeerId, roomId.value || gameState.value.roomId)
 
@@ -2205,15 +2530,7 @@ export const useGameStore = defineStore('game', () => {
       // Настраиваем обработчики для клиента
       setupClientMessageHandlers()
 
-      // Запрашиваем актуальное состояние игры
-      peerService.sendMessage(
-        newHostId,
-        makeMessage(
-          'request_game_state',
-          { requesterId: myPlayerId.value },
-          { roomId: gameState.value.roomId, fromId: myPlayerId.value, ts: Date.now() }
-        )
-      )
+      // Запрашиваем актуальное состояние игры (убрали дублирующий вызов)
       peerService.sendMessage(
         newHostId,
         makeMessage(
@@ -2502,6 +2819,7 @@ export const useGameStore = defineStore('game', () => {
     peerService.broadcastMessage(migrationMessage)
   }
 
+
   // Сохранение расширенной сессии в localStorage
   const saveSession = () => {
     if (!myPlayerId.value || connectionStatus.value === 'disconnected') {
@@ -2593,6 +2911,25 @@ export const useGameStore = defineStore('game', () => {
       myNickname.value = sessionData.myNickname
       roomId.value = sessionData.roomId
 
+      // Защита от рассинхронизации роли/hostId после reload
+      // Если в sessionData.isHost === false, но в anchorState.hostId не равен myPlayerId, принудительно выставляем клиентскую роль
+      if (!sessionData.isHost && gameState.value.hostId && gameState.value.hostId !== myPlayerId.value) {
+        isHost.value = false
+        hostId.value = gameState.value.hostId
+      }
+
+      // Если в sessionData.isHost === true, но есть противоречие (hostId в состоянии другой),
+      // не принимаем роль хоста, пока не подтвердим через discovery
+      if (sessionData.isHost && gameState.value.hostId && gameState.value.hostId !== myPlayerId.value) {
+        console.log('⚠️ Detected hostId mismatch on reload, downgrading to client until discovery confirms host role', {
+          storedIsHost: sessionData.isHost,
+          anchorHostId: gameState.value.hostId,
+          myId: myPlayerId.value
+        })
+        isHost.value = false
+        hostId.value = gameState.value.hostId
+      }
+
       // УНИВЕРСАЛЬНАЯ ЛОГИКА: всегда начинаем с discovery
       console.log('Starting universal host discovery...')
       const currentHost = await universalHostDiscovery(sessionData)
@@ -2606,10 +2943,34 @@ export const useGameStore = defineStore('game', () => {
         hostId.value = currentHost.currentHostId
         await restoreAsClient(currentHost.currentHostId)
       } else {
-        console.log('No active host found, becoming host...')
-        // Никого нет - становимся хостом (первый восстановившийся)
-        isHost.value = true
-        await restoreAsHost()
+        // Если discovery никого не нашёл, проверим: действительно ли мы были хостом
+        // Хост подтверждён, только если sessionData.isHost === true И anchorState.hostId === myPlayerId
+        const canBeHost = !!(sessionData.isHost && (gameState.value.hostId === myPlayerId.value || !gameState.value.hostId))
+        if (canBeHost) {
+          console.log('No active host found, becoming host (confirmed by session and anchor)...')
+          isHost.value = true
+          await restoreAsHost()
+        } else {
+          console.log('No active host found and session not authoritative, forcing client mode and retrying discovery shortly...')
+          isHost.value = false
+          // Сбрасываем hostId в неизвестный до уточнения
+          hostId.value = ''
+          // Повторный короткий discovery (быстрая проверка)
+          const retryHost = await universalHostDiscovery({
+            ...sessionData,
+            hostId: sessionData.hostId // оставляем прошлый hostId для первой попытки
+          })
+          if (retryHost) {
+            hostId.value = retryHost.currentHostId
+            await restoreAsClient(retryHost.currentHostId)
+          } else {
+            // Как крайний случай — остаёмся отключенными, UI предложит переподключиться
+            connectionStatus.value = 'disconnected'
+            restorationState.value = 'idle'
+            console.log('Staying disconnected: no authoritative host and not confirmed host self-promotion')
+            return false
+          }
+        }
       }
 
       restorationState.value = 'idle'
@@ -2920,6 +3281,32 @@ export const useGameStore = defineStore('game', () => {
     })
   }
 
+  // Вспомогательная функция для идемпотентной отправки с ретраями (экспоненциальная задержка)
+  const gotFreshState = ref(false)
+  async function sendWithRetry(
+    targetId: string,
+    buildMessage: () => PeerMessage,
+    maxAttempts = 3,
+    baseDelayMs = 300,
+    stopOnStateUpdate = true
+  ): Promise<void> {
+    let attempt = 0
+    while (attempt < maxAttempts) {
+      attempt++
+      try {
+        peerService.sendMessage(targetId, buildMessage())
+      } catch {}
+      if (stopOnStateUpdate && gotFreshState.value) {
+        return
+      }
+      const delay = baseDelayMs * Math.pow(2, attempt - 1)
+      await new Promise(r => setTimeout(r, delay))
+      if (stopOnStateUpdate && gotFreshState.value) {
+        return
+      }
+    }
+  }
+
   // Восстановление хоста
   const restoreAsHost = async () => {
     console.log('Restoring as host...')
@@ -2955,16 +3342,7 @@ export const useGameStore = defineStore('game', () => {
       gameState.value.players[myPlayerIndex].id = newPeerId
     }
 
-    // Устанавливаем роль хоста и запускаем heartbeat
-    peerService.setRoomContext(roomId.value || gameState.value.roomId || null as any)
-    peerService.setAsHost(newPeerId, roomId.value || gameState.value.roomId)
-    // Устанавливаем роль хоста и запускаем heartbeat
-    peerService.setRoomContext(roomId.value || gameState.value.roomId || null as any)
-    peerService.setAsHost(newPeerId, roomId.value || gameState.value.roomId)
-    // Устанавливаем роль хоста и запускаем heartbeat
-    peerService.setRoomContext(roomId.value || gameState.value.roomId || null as any)
-    peerService.setAsHost(newPeerId, roomId.value || gameState.value.roomId)
-    // Устанавливаем роль хоста и запускаем heartbeat
+    // Устанавливаем роль хоста и запускаем heartbeat (убраны 3 дубликата)
     peerService.setRoomContext(roomId.value || gameState.value.roomId || null as any)
     peerService.setAsHost(newPeerId, roomId.value || gameState.value.roomId)
 
@@ -2972,6 +3350,13 @@ export const useGameStore = defineStore('game', () => {
     setupHostMessageHandlers()
     // Немедленно шлем консистентный снапшот, чтобы клиенты выровнялись после рестарта хоста
     broadcastGameState()
+    // Также положим снапшот в localStorage как якорь для быстрых reload клиентов
+    try {
+      localStorage.setItem(HOST_STATE_STORAGE_KEY, JSON.stringify({
+        ts: Date.now(),
+        state: { ...gameState.value }
+      }))
+    } catch {}
 
     console.log('Host restored with ID (may be same as before):', newPeerId)
   }
@@ -2985,6 +3370,12 @@ export const useGameStore = defineStore('game', () => {
       if ((gameState.value.phase ?? 'lobby') !== 'lobby') {
         gameState.value.gameStarted = true
       }
+
+      // Устанавливаем контекст комнаты ДО любых сетевых действий
+      peerService.setRoomContext(roomId.value || gameState.value.roomId || null as any)
+
+      // Флаг свежего состояния
+      gotFreshState.value = false
 
       // ИСПРАВЛЕНО: НЕ очищаем litUpPlayerId сразу, дождемся актуального состояния
       console.log('Keeping current litUpPlayerId until state sync:', gameState.value.litUpPlayerId)
@@ -3001,6 +3392,8 @@ export const useGameStore = defineStore('game', () => {
       console.log('Updated to new peer ID:', myPlayerId.value)
 
       // Устанавливаем роль клиента
+      isHost.value = false
+      hostId.value = targetHostId
       peerService.setAsClient()
 
       // Настраиваем обработчики
@@ -3009,39 +3402,45 @@ export const useGameStore = defineStore('game', () => {
       // КРИТИЧНО: Добавляем mesh-обработчики при восстановлении
       setupMeshProtocolHandlers()
 
-      // Ждем немного для установки соединения
-      await new Promise(resolve => setTimeout(resolve, 500))
+      // Прочистим неактивные соединения
+      try { peerService.cleanupInactiveConnections() } catch {}
 
-      // Отправляем запрос с правильным старым ID для поиска существующего игрока
-      peerService.sendMessage(
+      // Ждем немного для установки соединения
+      await new Promise(resolve => setTimeout(resolve, 300))
+
+      // Идемпотентная отправка join_request с ретраями до получения свежего состояния
+      await sendWithRetry(
         targetHostId,
-        makeMessage(
+        () => makeMessage(
           'join_request',
           {
             nickname: myNickname.value,
             savedPlayerId: originalPlayerId // Используем СТАРЫЙ ID для поиска существующего игрока
           },
           { roomId: roomId.value || gameState.value.roomId, fromId: myPlayerId.value, ts: Date.now() }
-        )
+        ),
+        3,
+        300,
+        true
       )
 
-      // Ждем немного для обработки подключения
-      await new Promise(resolve => setTimeout(resolve, 300))
-
-      // Запрашиваем актуальное состояние игры
-      peerService.sendMessage(
+      // Идемпотентный запрос актуального состояния с ретраями
+      await sendWithRetry(
         targetHostId,
-        makeMessage(
+        () => makeMessage(
           'request_game_state',
           { requesterId: myPlayerId.value },
           { roomId: roomId.value || gameState.value.roomId, fromId: myPlayerId.value, ts: Date.now() }
-        )
+        ),
+        3,
+        300,
+        true
       )
 
       // КРИТИЧНО: Запрашиваем список peer'ов для mesh-соединений
-      peerService.sendMessage(
+      await sendWithRetry(
         targetHostId,
-        makeMessage(
+        () => makeMessage(
           'request_peer_list',
           {
             requesterId: myPlayerId.value,
@@ -3049,11 +3448,38 @@ export const useGameStore = defineStore('game', () => {
             timestamp: Date.now()
           },
           { roomId: roomId.value || gameState.value.roomId, fromId: myPlayerId.value, ts: Date.now() }
-        )
+        ),
+        2,
+        300,
+        false
       )
 
-      // Ждем получения обновленного состояния
+      // Ждем получения обновленного состояния (быстрая проверка)
       await waitForGameStateUpdate()
+
+      // Дополнительная защита: если после sync hostId в состоянии отличается от targetHostId — обновим локально
+      if (gameState.value.hostId && hostId.value !== gameState.value.hostId) {
+        console.log('Adjusting hostId after state sync:', { prev: hostId.value, next: gameState.value.hostId })
+        hostId.value = gameState.value.hostId
+      }
+
+      // Быстрый mesh: запросим список пиров ещё раз через короткую задержку
+      setTimeout(() => {
+        try {
+          peerService.sendMessage(
+            targetHostId,
+            makeMessage(
+              'request_peer_list',
+              {
+                requesterId: myPlayerId.value,
+                requesterToken: '',
+                timestamp: Date.now()
+              },
+              { roomId: roomId.value || gameState.value.roomId, fromId: myPlayerId.value, ts: Date.now() }
+            )
+          )
+        } catch {}
+      }, 300)
 
       console.log('Client restored and reconnected with updated state')
     } catch (error: unknown) {
@@ -3064,53 +3490,49 @@ export const useGameStore = defineStore('game', () => {
   }
 
   // Ожидание обновления состояния игры
+  // BUGFIX: уменьшаем общее время ожидания и условия готовности, чтобы UI быстрее «просыпался» после reload
   const waitForGameStateUpdate = (): Promise<void> => {
     return new Promise((resolve) => {
       let attempts = 0
-      const maxAttempts = 20
+      const maxAttempts = 10 // было 20 -> ускоряем
 
       const snapshotPhase = gameState.value.phase
 
       const checkForUpdate = () => {
         attempts++
 
-        // Проверяем, что у нас есть актуальные данные игроков
-        const hasValidPlayers = gameState.value.players.length > 0 &&
-          gameState.value.players.some((p: Player) => p.nickname && p.nickname !== '')
+        // Достаточно иметь хотя бы 1 игрока и валидную фазу
+        const hasAnyPlayers = gameState.value.players.length > 0
 
-        // Проверяем корректность litUpPlayerId - если указан, то игрок должен существовать
+        // Корректность litUpPlayerId: если указана, должна существовать
         const litUpPlayerValid = !gameState.value.litUpPlayerId ||
           gameState.value.players.some((p: Player) => p.id === gameState.value.litUpPlayerId)
 
-        // Если в снапшоте была не 'lobby' — ждём прихода валидной (не 'lobby') фазы
+        // Если в снапшоте была не 'lobby' — ждём не-lobby
         const phaseConsistent = snapshotPhase && snapshotPhase !== 'lobby'
           ? (gameState.value.phase && gameState.value.phase !== 'lobby')
           : true
 
-        if ((hasValidPlayers && litUpPlayerValid && phaseConsistent) || attempts >= maxAttempts) {
-          // Очищаем некорректный litUpPlayerId если игрок не найден
+        if ((hasAnyPlayers && litUpPlayerValid && phaseConsistent) || attempts >= maxAttempts) {
           if (gameState.value.litUpPlayerId && !litUpPlayerValid) {
             console.log('Clearing invalid litUpPlayerId:', gameState.value.litUpPlayerId)
             gameState.value.litUpPlayerId = null
           }
 
-          // Если пришла валидная фаза — синхронизируем флаг gameStarted
           if ((gameState.value.phase ?? 'lobby') !== 'lobby') {
             gameState.value.gameStarted = true
           }
 
-          console.log('Game state synchronized, players:', gameState.value.players.length,
+          console.log('Game state synchronized (fast), players:', gameState.value.players.length,
             'phase:', gameState.value.phase,
             'litUpPlayerId:', gameState.value.litUpPlayerId)
           resolve()
         } else {
-          // Пробуем еще раз через короткий интервал
-          setTimeout(checkForUpdate, 200)
+          setTimeout(checkForUpdate, 150) // быстрее цикл
         }
       }
 
-      // Начальная проверка через небольшую задержку
-      setTimeout(checkForUpdate, 300)
+      setTimeout(checkForUpdate, 150)
     })
   }
 
@@ -3118,6 +3540,78 @@ export const useGameStore = defineStore('game', () => {
   const hasActiveSession = (): boolean => {
     const sessionData = loadSession()
     return sessionData !== null
+  }
+
+  // Клиентский "мягкий" выход с сохранением очков и присутствием 'absent'
+  // Требования:
+  // - Оптимистически помечаем себя "Отсутствует"
+  // - Шлём user_left_room с (userId, roomId, timestamp, currentScore, reason)
+  // - Блокируем элементы управления, зависящие от присутствия (через isCurrentUserAbsent)
+  // - При ошибке откатываем статус и показываем уведомление
+  const clientLeaveRoom = async () => {
+    try {
+      // Инициализация контейнеров присутствия
+      if (!gameState.value.presence) gameState.value.presence = {}
+      if (!gameState.value.presenceMeta) gameState.value.presenceMeta = {}
+
+      const me = myPlayerId.value
+      const nowTs = Date.now()
+
+      // 1) Оптимистический апдейт локального UI
+      if (me) {
+        gameState.value.presence[me] = 'absent'
+        gameState.value.presenceMeta[me] = {
+          lastSeen: Math.max(nowTs, gameState.value.presenceMeta[me]?.lastSeen || 0),
+          leftAt: nowTs,
+          reason: 'explicit_leave'
+        }
+      }
+
+      // 2) Формируем и отправляем событие user_left_room
+      const payload = {
+        userId: me,
+        roomId: roomId.value || gameState.value.roomId,
+        timestamp: nowTs,
+        currentScore: gameState.value.scores?.[me] ?? 0,
+        reason: 'explicit_leave' as const
+      }
+
+      // Отправляем c ретраями, но не ждём game_state_update
+      gotFreshState.value = false
+      await sendWithRetry(
+        hostId.value || gameState.value.hostId,
+        () =>
+          makeMessage(
+            'user_left_room',
+            payload as any,
+            { roomId: payload.roomId, fromId: me, ts: Date.now() }
+          ),
+        3,
+        300,
+        false
+      )
+
+      // 3) Отключаемся и чистим локальные данные, но не сбрасываем визуально историю очков
+      peerService.disconnect()
+      clearSession()
+      connectionStatus.value = 'disconnected'
+    } catch (e) {
+      // 4) Откат оптимистического апдейта
+      const me = myPlayerId.value
+      if (me) {
+        if (!gameState.value.presence) gameState.value.presence = {}
+        if (!gameState.value.presenceMeta) gameState.value.presenceMeta = {}
+        gameState.value.presence[me] = 'present'
+        const lastSeen = Math.max(Date.now(), gameState.value.presenceMeta[me]?.lastSeen || 0)
+        gameState.value.presenceMeta[me] = { lastSeen }
+      }
+      // Простое уведомление об ошибке (можно заменить на тостер)
+      try {
+        // eslint-disable-next-line no-alert
+        alert('Не удалось покинуть комнату. Повторите попытку.')
+      } catch {}
+      throw e
+    }
   }
 
   // Покинуть комнату
@@ -3159,15 +3653,49 @@ export const useGameStore = defineStore('game', () => {
       localStorage.setItem('savedNickname', myNickname.value || generateDefaultNickname())
     }
     myNickname.value = ''
+    // При выходе чистим игровые записи, никнейм оставляем
+    removeGameItemsByPrefix(GAME_PREFIX)
     isHost.value = false
     hostId.value = ''
     roomId.value = ''
     connectionStatus.value = 'disconnected'
   }
 
+  // Доступность и локализация: вычисляемые помощники для UI
+  const isCurrentUserAbsent = computed<boolean>(() => {
+    const me = myPlayerId.value
+    const st = gameState.value.presence?.[me]
+    return st === 'absent'
+  })
+
+  // Уведомления ARIA-live: вызывайте в компонентах при событиях user_left_broadcast/user_joined_broadcast
+  const ariaAnnounce = (text: string) => {
+    try {
+      const regionId = 'aria-live-region'
+      let region = document.getElementById(regionId)
+      if (!region) {
+        region = document.createElement('div')
+        region.id = regionId
+        region.setAttribute('role', 'status')
+        region.setAttribute('aria-live', 'polite')
+        region.style.position = 'absolute'
+        region.style.width = '1px'
+        region.style.height = '1px'
+        region.style.overflow = 'hidden'
+        region.style.clip = 'rect(1px, 1px, 1px, 1px)'
+        region.style.clipPath = 'inset(50%)'
+        region.style.whiteSpace = 'nowrap'
+        region.style.border = '0'
+        document.body.appendChild(region)
+      }
+      region.textContent = text
+    } catch {}
+  }
+
   // Установка никнейма по умолчанию при инициализации
   if (!myNickname.value) {
-    myNickname.value = generateDefaultNickname()
+    // Пытаемся взять сохранённый ник из non-prefixed ключа
+    myNickname.value = getNickname() || generateDefaultNickname()
   }
 
   // При инициализации, если мы будем создавать комнату — переиспользуем стабильный roomId
@@ -3223,7 +3751,7 @@ export const useGameStore = defineStore('game', () => {
     }
   }
 
-  const clientSubmitBet = (bet: '0' | '+-' | '+') => {
+  const clientSubmitBet = (bet: '0' | '±' | '+') => {
     if (isHost.value) {
       submitBet(myPlayerId.value, bet)
     } else {
@@ -3369,6 +3897,11 @@ export const useGameStore = defineStore('game', () => {
     }
   }
 
+  // UI helper: признак процесса восстановления/переподключения
+  const uiConnecting = computed<boolean>(() => {
+    return connectionStatus.value === 'connecting' || restorationState.value !== 'idle'
+  })
+
   return {
     // State
     gameState,
@@ -3380,6 +3913,10 @@ export const useGameStore = defineStore('game', () => {
     connectionStatus,
     gameMode,
     gamePhase,
+    uiConnecting,
+    // Presence helpers for UI
+    isCurrentUserAbsent,
+    ariaAnnounce,
 
     // Computed
     canStartGame,
@@ -3400,6 +3937,7 @@ export const useGameStore = defineStore('game', () => {
     submitBet,
     finishRound: finishRoundHostOnly,
     leaveRoom,
+    leaveGracefully: clientLeaveRoom,
     broadcastGameState,
 
     // Client-side actions (обертки, отправка сообщений)

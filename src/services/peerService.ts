@@ -14,6 +14,8 @@ class PeerService {
   private peer: Peer | null = null
   private connections: Map<string, DataConnection> = new Map()
   private messageHandlers: Map<string, (data: PeerMessage, conn?: DataConnection) => void> = new Map()
+  // Дедупликация сообщений по ключу (type+roomId+userId+timestamp)
+  private processedMessages: Set<string> = new Set()
   
   // Сохранение peer ID хоста для восстановления после перезагрузки
   private static readonly HOST_PEER_ID_KEY = 'hostPeerId'
@@ -28,6 +30,10 @@ class PeerService {
   
   // Callback для обнаружения отключения хоста
   private onHostDisconnectedCallback: (() => void) | null = null
+
+  // Callbacks присутствия клиентов (для роли хоста)
+  private onClientDisconnectedCallback: ((peerId: string) => void) | null = null
+  private onClientReconnectedCallback: ((peerId: string) => void) | null = null
   
   // Mesh-соединения для P2P архитектуры
   private knownPeers: Set<string> = new Set()
@@ -177,6 +183,22 @@ class PeerService {
     conn.on('data', (data) => {
       const message = data as PeerMessage
       console.log('📥 RECEIVED MESSAGE:', message.type, 'from:', conn.peer, 'payload:', message.payload)
+
+      // Простая дедупликация по ключу
+      try {
+        const key = `${message.type}:${message.meta?.roomId || ''}:${(message as any)?.payload?.userId || (message as any)?.payload?.requesterId || ''}:${message.meta?.ts || (message as any)?.payload?.timestamp || ''}`
+        if (this.processedMessages.has(key)) {
+          console.log('🧯 Duplicate message ignored:', key)
+          return
+        }
+        // Ограничиваем размер множества для памяти
+        if (this.processedMessages.size > 2000) {
+          this.processedMessages.clear()
+        }
+        this.processedMessages.add(key)
+      } catch (e) {
+        console.warn('Dedup key generation failed (non-critical):', e)
+      }
       
       const handler = this.messageHandlers.get(message.type)
       if (handler) {
@@ -189,17 +211,46 @@ class PeerService {
     
     conn.on('close', () => {
       console.log('Connection closed:', conn.peer)
-      this.connections.delete(conn.peer)
+      const peerId = conn.peer
+      this.connections.delete(peerId)
+
+      // Если мы хост — уведомляем верхний слой о дисконнекте клиента
+      if (this.isHostRole && this.onClientDisconnectedCallback) {
+        try {
+          this.onClientDisconnectedCallback(peerId)
+        } catch (e) {
+          console.warn('onClientDisconnected callback failed:', e)
+        }
+      }
     })
     
     conn.on('error', (error) => {
       console.error('Connection error:', error)
-      this.connections.delete(conn.peer)
+      const peerId = conn.peer
+      this.connections.delete(peerId)
+      // Ошибка соединения для клиента у хоста — также считаем как потенциальный disconnect
+      if (this.isHostRole && this.onClientDisconnectedCallback) {
+        try {
+          this.onClientDisconnectedCallback(peerId)
+        } catch (e) {
+          console.warn('onClientDisconnected callback failed (error path):', e)
+        }
+      }
     })
   }
   
   // Отправка сообщения конкретному пиру
   sendMessage(peerId: string, message: PeerMessage) {
+    // Предочистка неактивных соединений перед отправкой
+    try {
+      const removed = this.cleanupInactiveConnections()
+      if (removed > 0) {
+        console.log('🧹 Cleaned up inactive connections before send:', removed)
+      }
+    } catch (e) {
+      console.warn('Cleanup before send failed (non-critical):', e)
+    }
+
     const conn = this.connections.get(peerId)
     console.log('Attempting to send message:', {
       peerId,
@@ -210,9 +261,18 @@ class PeerService {
     })
     
     if (conn && conn.open) {
-      conn.send(message)
-      console.log('Message sent successfully to:', peerId)
+      try {
+        conn.send(message)
+        console.log('Message sent successfully to:', peerId)
+      } catch (err) {
+        console.error('Failed to send over open connection:', peerId, err)
+      }
     } else {
+      // Если соединение отсутствует или закрыто — удаляем его из пула для консистентности
+      if (conn && !conn.open) {
+        this.connections.delete(peerId)
+        console.warn('Removed closed connection from pool:', peerId)
+      }
       console.warn('Connection not found or closed:', peerId, {
         connectionExists: !!conn,
         connectionOpen: conn?.open,
@@ -223,11 +283,33 @@ class PeerService {
   
   // Отправка сообщения всем подключенным пирам (для хоста)
   broadcastMessage(message: PeerMessage) {
+    // Предочистка неактивных соединений перед рассылкой
+    try {
+      const removed = this.cleanupInactiveConnections()
+      if (removed > 0) {
+        console.log('🧹 Cleaned up inactive connections before broadcast:', removed)
+      }
+    } catch (e) {
+      console.warn('Cleanup before broadcast failed (non-critical):', e)
+    }
+
+    const toRemove: string[] = []
     this.connections.forEach((conn, peerId) => {
       if (conn.open) {
-        conn.send(message)
+        try {
+          conn.send(message)
+        } catch (err) {
+          console.error('Failed to send message to peer during broadcast:', peerId, err)
+        }
+      } else {
+        toRemove.push(peerId)
       }
     })
+
+    if (toRemove.length > 0) {
+      toRemove.forEach(id => this.connections.delete(id))
+      console.log('🧹 Removed closed connections during broadcast:', toRemove)
+    }
   }
   
   // Регистрация обработчика сообщений
@@ -281,7 +363,12 @@ class PeerService {
   // Установка роли клиента и мониторинг heartbeat
   setAsClient() {
     this.isHostRole = false
+    // Останавливаем heartbeat хоста и очищаем все таймеры на всякий случай
     this.stopHeartbeat()
+    this.heartbeatTimers.forEach(t => clearTimeout(t))
+    this.heartbeatTimers.clear()
+    // Сбрасываем маркер последнего heartbeat, чтобы избежать ложного таймаута от предыдущего хоста
+    this.lastHeartbeatReceived = Date.now()
     this.startHeartbeatMonitoring()
   }
   
@@ -368,6 +455,15 @@ class PeerService {
   // Регистрация callback для отключения хоста
   onHostDisconnected(callback: () => void) {
     this.onHostDisconnectedCallback = callback
+  }
+
+  // Регистрация callback'ов для событий клиентов (хост-сторона)
+  onClientDisconnected(callback: (peerId: string) => void) {
+    this.onClientDisconnectedCallback = callback
+  }
+
+  onClientReconnected(callback: (peerId: string) => void) {
+    this.onClientReconnectedCallback = callback
   }
   
   // Переподключение к новому хосту
@@ -527,9 +623,18 @@ class PeerService {
   addConnection(peerId: string, connection: DataConnection) {
     if (peerId !== this.getMyId()) {
       console.log('Adding connection to pool:', peerId)
+      const existed = this.connections.has(peerId) && this.connections.get(peerId)?.open
       this.connections.set(peerId, connection)
       this.knownPeers.add(peerId)
       this.setupConnectionHandlers(connection)
+      // Если мы хост и соединение перешло из закрытого в открытое — трактуем как "reconnected"
+      if (this.isHostRole && this.onClientReconnectedCallback && !existed && connection.open) {
+        try {
+          this.onClientReconnectedCallback(peerId)
+        } catch (e) {
+          console.warn('onClientReconnected callback failed:', e)
+        }
+      }
     }
   }
   
@@ -852,6 +957,18 @@ class PeerService {
   // Установка контекста комнаты (используется для заполнения meta.roomId в heartbeat)
   setRoomContext(roomId: string | null) {
     this.currentRoomId = roomId || null
+  }
+
+  // Утилита широковещательной отправки событий присутствия
+  broadcastUserLeft(roomId: string, hostId: string, userId: string, reason: 'explicit_leave' | 'presence_timeout' | 'connection_closed', timestamp?: number) {
+    const ts = timestamp || Date.now()
+    const msg: PeerMessage = {
+      type: 'user_left_broadcast',
+      protocolVersion: PROTOCOL_VERSION,
+      meta: { roomId, fromId: hostId, ts },
+      payload: { userId, roomId, timestamp: ts, reason } as any
+    }
+    this.broadcastMessage(msg)
   }
 
   // Закрытие всех соединений

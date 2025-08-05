@@ -49,7 +49,7 @@ export interface GameState {
   bettingCards: Record<string, string[]> // Карточки ставок для каждого игрока
   votes?: Record<string, string[]> // { voterId: [targetId, targetId] }
   voteCounts?: Record<string, number> // агрегированные голоса по целям
-  bets?: Record<string, '0' | '+-' | '+'> // { playerId: bet }
+  bets?: Record<string, '0' | '±' | '+'> // { playerId: bet }
   scores: Record<string, number> // Очки игроков
   roundScores?: Record<string, number> // Очки конкретного раунда
 
@@ -64,6 +64,14 @@ export interface GameState {
 
   // Финал
   winnerName?: string | null
+
+  // Присутствие игроков
+  presence?: Record<string, 'present' | 'absent'>
+  presenceMeta?: Record<string, {
+    lastSeen: number
+    leftAt?: number
+    reason?: 'explicit_leave' | 'presence_timeout' | 'connection_closed'
+  }>
 }
 
 export const PROTOCOL_VERSION = 1
@@ -91,6 +99,11 @@ export type StartGameMessage = BaseMessage<'start_game', { mode: GameMode }>
 export type HeartbeatMessage = BaseMessage<'heartbeat', HeartbeatPayload>
 export type RequestGameStateMessage = BaseMessage<'request_game_state', GameStateRequestPayload>
 export type ConnectionErrorMessage = BaseMessage<'connection_error', { code: string; message: string }>
+
+// Presence / оставление комнаты
+export type UserLeftRoomMessage = BaseMessage<'user_left_room', UserLeftRoomPayload>
+export type UserJoinedBroadcastMessage = BaseMessage<'user_joined_broadcast', UserJoinedBroadcastPayload>
+export type UserLeftBroadcastMessage = BaseMessage<'user_left_broadcast', UserLeftBroadcastPayload>
 
 // Миграция хоста
 export type MigrationProposalMessage = BaseMessage<'migration_proposal', MigrationProposalPayload>
@@ -161,6 +174,10 @@ export type PeerMessage =
   | SubmitGuessMessage
   | NextRoundRequestMessage
   | SubmitWinnersMessage
+  // Presence
+  | UserLeftRoomMessage
+  | UserJoinedBroadcastMessage
+  | UserLeftBroadcastMessage
 
 // Утилита для конструирования исходящих сообщений
 export function makeMessage<TType extends PeerMessage['type']>(
@@ -335,9 +352,34 @@ export const HOST_RECOVERY_ATTEMPTS = 3 // Количество попыток �
 export const HOST_RECOVERY_INTERVAL = 2000 // Интервал между попытками восстановления
 export const MESH_RESTORATION_DELAY = 1000 // Задержка восстановления mesh-соединений
 
+// Тайминги присутствия
+export const PRESENCE_REJOIN_GRACE = 4000 // 4 секунды на быстрое переподключение без метки "Отсутствует"
+
 // Полезные типы полезной нагрузки для игровых сообщений
 export interface DrawQuestionRequestPayload {
   playerId?: string // клиент может указать себя явно, хост может игнорировать
+}
+
+// Presence payloads
+export interface UserLeftRoomPayload {
+  userId: string
+  roomId: string
+  timestamp: number
+  currentScore?: number
+  reason: 'explicit_leave' | 'presence_timeout' | 'connection_closed'
+}
+
+export interface UserJoinedBroadcastPayload {
+  userId: string
+  roomId: string
+  timestamp: number
+}
+
+export interface UserLeftBroadcastPayload {
+  userId: string
+  roomId: string
+  timestamp: number
+  reason: 'explicit_leave' | 'presence_timeout' | 'connection_closed'
 }
 
 export interface SubmitVotePayload {
@@ -347,7 +389,7 @@ export interface SubmitVotePayload {
 
 export interface SubmitBetPayload {
   playerId: string
-  bet: '0' | '+-' | '+'
+  bet: '0' | '±' | '+'
 }
 
 export interface SubmitAnswerPayload {
