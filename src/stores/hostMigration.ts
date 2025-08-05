@@ -43,7 +43,7 @@ export async function handleHostMigration(
       await becomeNewHost(currentState, myCurrentId, roomId)
     } else {
       // Другой игрок избран хостом, я должен к нему подключиться
-      await reconnectToNewHost(newHostCandidate.id, myCurrentId)
+      await reconnectToNewHost(newHostCandidate.id, myCurrentId, currentState)
     }
   } catch (error) {
     console.error('HOST MIGRATION: Migration failed catastrophically.', error)
@@ -90,7 +90,8 @@ async function becomeNewHost(
  */
 async function reconnectToNewHost(
   newHostId: string,
-  myCurrentId: string
+  myCurrentId: string,
+  currentState?: GameState
 ): Promise<void> {
   console.log(`RECONNECT: Attempting to connect to new host ${newHostId}...`)
 
@@ -109,11 +110,18 @@ async function reconnectToNewHost(
 
   // 4. Отправляем запрос на присоединение.
   // Очень важно отправить свой ТЕКУЩИЙ ID, чтобы новый хост мог найти нас в списке игроков.
+  // Требуется полный JoinRequestPayload (минимум nickname), плюс savedPlayerId как опциональное поле
   peerService.sendMessage(newHostId, {
     type: 'join_request',
+    protocolVersion: 1,
+    meta: {
+      roomId: currentState?.roomId || '',
+      fromId: myCurrentId,
+      ts: Date.now()
+    },
     payload: { 
-      // nickname: myNickname.value,
-      savedPlayerId: myCurrentId, // Отправляем свой ID, под которым мы были в старой сессии
+      nickname: (currentState?.players.find((p: Player) => p.id === myCurrentId)?.nickname) || 'Player',
+      savedPlayerId: myCurrentId
     }
   })
 

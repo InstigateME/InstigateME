@@ -1,12 +1,13 @@
 import Peer from 'peerjs'
 import type { DataConnection } from 'peerjs'
-import type { PeerMessage, HeartbeatPayload } from '@/types/game'
+import type { PeerMessage, HeartbeatPayload, MessageMeta } from '@/types/game'
 import { 
   HEARTBEAT_INTERVAL, 
   HEARTBEAT_TIMEOUT, 
   HOST_GRACE_PERIOD, 
   HOST_RECOVERY_ATTEMPTS, 
-  HOST_RECOVERY_INTERVAL 
+  HOST_RECOVERY_INTERVAL, 
+  PROTOCOL_VERSION 
 } from '@/types/game'
 
 class PeerService {
@@ -294,8 +295,17 @@ class PeerService {
     }
     
     this.heartbeatInterval = window.setInterval(() => {
+      // Формируем meta для сообщения по требованиям BaseMessage
+      const meta: MessageMeta = {
+        roomId: '', // TODO: подставить реальный roomId, если доступен в этом сервисе
+        fromId: this.getMyId() || hostId,
+        ts: Date.now()
+      }
+
       const heartbeatMessage: PeerMessage = {
         type: 'heartbeat',
+        protocolVersion: PROTOCOL_VERSION,
+        meta,
         payload: {
           timestamp: Date.now(),
           hostId: hostId

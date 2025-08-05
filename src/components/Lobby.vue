@@ -7,7 +7,7 @@
           Покинуть комнату
         </button>
       </div>
-      
+
       <!-- Хост секция -->
       <div v-if="gameStore.isHost" class="host-section">
         <div class="room-info">
@@ -22,23 +22,28 @@
             <div class="host-info">
               <small>Отправьте этот ID друзьям для подключения к комнате</small>
             </div>
-            
+
             <div style="margin-top: 20px;">
               <h4>Название комнаты: {{ gameStore.gameState.roomId }}</h4>
               <small style="color: #666;">Для удобства запоминания</small>
             </div>
           </div>
-          
+
           <div class="qr-section">
             <h3>QR-код для подключения:</h3>
             <div class="qr-container">
               <canvas ref="qrCanvas" class="qr-code"></canvas>
             </div>
+            <div class="qr-link">
+              <button class="copy-link-btn" @click="copyJoinLink" :disabled="!gameStore.gameState.roomId">
+                {{ linkCopied ? 'Ссылка скопирована!' : 'Скопировать ссылку' }}
+              </button>
+            </div>
           </div>
         </div>
-        
+
         <div class="start-section">
-          <button 
+          <button
             class="btn btn-primary btn-large"
             @click="startGame"
             :disabled="!gameStore.canStartGame"
@@ -47,7 +52,7 @@
           </button>
         </div>
       </div>
-      
+
       <!-- Клиент секция -->
       <div v-else class="client-section">
         <div class="waiting-message">
@@ -55,13 +60,13 @@
           <p>Хост начнет игру, когда будет готов</p>
         </div>
       </div>
-      
+
       <!-- Список игроков -->
       <div class="players-section">
         <h3>Игроки в комнате ({{ gameStore.gameState.players.length }}/{{ gameStore.gameState.maxPlayers }}):</h3>
         <div class="players-list">
-          <div 
-            v-for="player in gameStore.gameState.players" 
+          <div
+            v-for="player in gameStore.gameState.players"
             :key="player.id"
             class="player-item"
             :style="{ backgroundColor: player.color + '20', borderColor: player.color }"
@@ -77,7 +82,7 @@
           </div>
         </div>
       </div>
-      
+
       <div v-if="errorMessage" class="error-message">
         {{ errorMessage }}
       </div>
@@ -98,14 +103,17 @@ const qrCanvas = ref<HTMLCanvasElement>()
 const copied = ref(false)
 const copiedHostId = ref(false)
 const errorMessage = ref('')
+const linkCopied = ref(false)
+
+const generateUrl = (): string =>
+  `${window.location.origin}/?hostId=${encodeURIComponent(gameStore.gameState.hostId)}`
 
 // Генерация QR-кода
 const generateQRCode = async () => {
   if (!qrCanvas.value || !gameStore.gameState.hostId) return
-  
+
   try {
-    const url = `${window.location.origin}/?host=${gameStore.gameState.hostId}`
-    await QRCode.toCanvas(qrCanvas.value, url, {
+    await QRCode.toCanvas(qrCanvas.value, generateUrl(), {
       width: 200,
       margin: 2,
       color: {
@@ -131,7 +139,7 @@ const copyRoomId = async () => {
   }
 }
 
-// Копирование ID хоста
+ // Копирование ID хоста
 const copyHostId = async () => {
   try {
     await navigator.clipboard.writeText(gameStore.gameState.hostId)
@@ -141,6 +149,19 @@ const copyHostId = async () => {
     }, 2000)
   } catch (error) {
     console.error('Failed to copy host ID:', error)
+  }
+}
+
+// Копирование ссылки подключения
+const copyJoinLink = async () => {
+  try {
+    await navigator.clipboard.writeText(generateUrl())
+    linkCopied.value = true
+    setTimeout(() => {
+      linkCopied.value = false
+    }, 2000)
+  } catch (error) {
+    console.error('Failed to copy join link:', error)
   }
 }
 
@@ -174,7 +195,7 @@ onMounted(() => {
     router.push('/')
     return
   }
-  
+
   // Генерируем QR-код для хоста
   if (gameStore.isHost) {
     generateQRCode()
@@ -301,6 +322,42 @@ onMounted(() => {
 .qr-code {
   border-radius: 10px;
   box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+}
+
+.qr-link {
+  margin-top: 10px;
+  text-align: center;
+  word-break: break-all;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.copy-link-btn {
+  background: #2563eb;
+  color: white;
+  border: none;
+  padding: 8px 14px;
+  border-radius: 8px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.copy-link-btn:hover {
+  background: #1d4ed8;
+}
+
+.copy-link-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.qr-link-hint {
+  color: #3b82f6;
+  font-family: monospace;
+  font-size: 0.9rem;
 }
 
 .start-section {
@@ -439,12 +496,12 @@ onMounted(() => {
     grid-template-columns: 1fr;
     gap: 20px;
   }
-  
+
   .room-id-display {
     flex-direction: column;
     align-items: stretch;
   }
-  
+
   .players-list {
     grid-template-columns: 1fr;
   }

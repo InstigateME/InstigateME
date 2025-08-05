@@ -1,8 +1,8 @@
 <template>
   <div class="main-menu">
     <div class="container">
-      <h1 class="title">P2P Light-Up</h1>
-      <p class="subtitle">Многопользовательская игра без сервера</p>
+      <h1 class="title">Провокатор</h1>
+      <p class="subtitle">Многопользовательская карточная игра</p>
 
       <div class="form-section">
         <div class="input-group">
@@ -86,7 +86,7 @@ const joinRoomId = ref('')
 const errorMessage = ref('')
 const isRestoringSession = ref(false)
 
-// Проверяем, есть ли hostId в URL (переход по QR-коду) и сохраненная сессия
+ // Проверяем, есть ли hostId в URL (переход по QR-коду) и сохраненная сессия
 onMounted(async () => {
   const savedNickname = localStorage.getItem('savedNickname')
   if (savedNickname) {
@@ -95,7 +95,8 @@ onMounted(async () => {
     gameStore.myNickname = gameStore.generateDefaultNickname()
   }
 
-  const hostIdFromUrl = route.query.host as string
+  // Поддержка обоих вариантов: ?hostId=... и ?host=...
+  const hostIdFromUrl = (route.query.hostId as string) || (route.query.host as string)
   if (hostIdFromUrl) {
     joinRoomId.value = hostIdFromUrl
   }
