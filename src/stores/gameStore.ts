@@ -45,14 +45,25 @@ export const useGameStore = defineStore('game', () => {
   // Структура очков: { [playerId]: number }
 
   // Режим игры: 'basic' — обычный, 'advanced' — 2.0 (с письменными ответами)
+  // gameMode хранит текущий активный режим и синхронизируется в gameState для клиентов.
   const gameMode = ref<'basic' | 'advanced'>('basic')
-  const gamePhase = ref<'lobby' | 'drawing_question' | 'voting' | 'secret_voting' | 'betting' | 'results' | 'answering' | 'guessing' | 'advanced_results' | 'game_over'>('lobby')
+  const gamePhase = ref<'lobby' | 'drawing_question' | 'voting' | 'secret_voting' | 'betting' | 'results' | 'answering' | 'guessing' | 'selecting_winners' | 'advanced_results' | 'game_over'>('lobby')
 
   // Чередование: 16 раундов, нечетные — basic, четные — advanced
   const TOTAL_ROUNDS = 16
   const currentRound = ref<number>(1)
   const currentMode = computed<'basic' | 'advanced'>(() => (currentRound.value % 2 === 1 ? 'basic' : 'advanced'))
   const roundsLeft = computed<number>(() => Math.max(0, TOTAL_ROUNDS - currentRound.value + 1))
+
+  // Следующий раунд: инкрементируем счетчик до 16 и пересчитываем режим
+  const advanceRound = () => {
+    if (currentRound.value < TOTAL_ROUNDS) {
+      currentRound.value += 1
+    }
+    // Обновляем режим согласно чередованию и синхронизируем в state
+    gameMode.value = currentMode.value
+    gameState.value.gameMode = currentMode.value
+  }
 
   const initializeGame = (mode: 'basic' | 'advanced' = 'basic') => {
     gamePhase.value = 'lobby';
@@ -90,6 +101,11 @@ export const useGameStore = defineStore('game', () => {
       gameState.value.answeringPlayerId = null
       gameState.value.advancedAnswer = null
     }
+
+    // Стартуем строго с первого раунда и корректного режима по чередованию
+    currentRound.value = 1
+    gameMode.value = currentMode.value
+    gameState.value.gameMode = currentMode.value
 
     // Переводим в фазу вытягивания вопроса
     gamePhase.value = 'drawing_question'
@@ -144,7 +160,7 @@ export const useGameStore = defineStore('game', () => {
     // Очистка произойдет в finishRound при переходе к следующему раунду.
   };
 
-  // mode: 'basic' | 'advanced'
+    // mode: 'basic' | 'advanced'
   const startGame = (mode: 'basic' | 'advanced' = 'basic') => {
     if (!isHost.value) return
     // Разрешаем старт при >=3 игроках ИЛИ мы находимся в явной фазе лобби
@@ -153,9 +169,12 @@ export const useGameStore = defineStore('game', () => {
     if (!enoughPlayers && !isLobby) return
 
     // Инициализируем игру и явно дублируем всё в gameState для клиентов
+    // Параметр mode больше НЕ фиксирует режим — режим строго задается чередованием по currentRound.
     initializeGame(mode)
     gameState.value.gameStarted = true
-    gameState.value.gameMode = mode
+    // Синхронизируем режим строго из currentMode (источник правды — номер раунда)
+    gameMode.value = currentMode.value
+    gameState.value.gameMode = currentMode.value
     gameState.value.phase = 'drawing_question'
 
     // Немедленно шлем актуальное состояние всем клиентам
@@ -189,6 +208,9 @@ export const useGameStore = defineStore('game', () => {
     // После того как вопрос установлен и разослан в фазе drawing_question,
     // сразу переходим к голосованию, чтобы шаблон показывал одновременно карточку и голосование.
     // Карточка вопроса будет отображаться в секции голосования (см. GameField.vue).
+    // На всякий случай синхронизируем режим перед выбором следующей фазы
+    gameMode.value = currentMode.value
+    gameState.value.gameMode = currentMode.value
     const nextPhase = gameMode.value === 'basic' ? 'voting' : 'secret_voting'
     gamePhase.value = nextPhase
     gameState.value.phase = nextPhase
@@ -267,6 +289,9 @@ export const useGameStore = defineStore('game', () => {
         gameState.value.currentTurn = nextTurn
         gameState.value.currentTurnPlayerId = gameState.value.players[nextTurn]?.id || null
 
+        // Инкремент номера раунда и переключение режима по чередованию basic/advanced
+        advanceRound()
+
         // Сброс раундовых данных
         gameState.value.currentQuestion = null
         gameState.value.votes = {}
@@ -275,7 +300,8 @@ export const useGameStore = defineStore('game', () => {
         gameState.value.roundScores = {}
 
         // Проверка на конец игры
-        if (gameState.value.questionCards.length === 0) {
+        // Проверка на конец игры по лимиту раундов или отсутствию карт
+        if (currentRound.value > TOTAL_ROUNDS || gameState.value.questionCards.length === 0) {
           gamePhase.value = 'game_over'
           gameState.value.phase = 'game_over'
         } else {
@@ -326,23 +352,12 @@ export const useGameStore = defineStore('game', () => {
       }
 
       if (gamePhase.value === 'guessing') {
-        // Подсчет очков за угадывание
-        if (!gameState.value.roundScores) gameState.value.roundScores = {}
-        const correct = (gameState.value.advancedAnswer || '').trim().toLowerCase()
-        Object.entries(gameState.value.guesses || {}).forEach(([pid, guess]) => {
-          if (pid !== gameState.value.answeringPlayerId) {
-            const ok = (guess || '').trim().toLowerCase() === correct && correct.length > 0
-            if (ok) {
-              gameState.value.roundScores![pid] = (gameState.value.roundScores![pid] || 0) + 1
-              gameState.value.scores[pid] = (gameState.value.scores[pid] || 0) + 1
-            } else {
-              gameState.value.roundScores![pid] = gameState.value.roundScores![pid] || 0
-            }
-          }
-        })
-
-        gamePhase.value = 'advanced_results'
-        gameState.value.phase = 'advanced_results'
+        // После получения всех догадок переходим к фазе выбора победителей автором правильного ответа
+        // Выбирает игрок, писавший правильный ответ (answeringPlayerId).
+        gamePhase.value = 'selecting_winners'
+        gameState.value.phase = 'selecting_winners'
+        // Инициализируем контейнер для выбранных победителей этого раунда
+        if (!gameState.value.roundWinners) gameState.value.roundWinners = []
         broadcastGameState()
         return
       }
@@ -353,16 +368,21 @@ export const useGameStore = defineStore('game', () => {
         gameState.value.currentTurn = nextTurn
         gameState.value.currentTurnPlayerId = gameState.value.players[nextTurn]?.id || null
 
+        // Инкремент номера раунда и переключение режима по чередованию basic/advanced
+        advanceRound()
+
         gameState.value.currentQuestion = null
         gameState.value.votes = {}
         gameState.value.voteCounts = {}
         gameState.value.guesses = {}
+        ;(gameState.value as any).roundWinners = []
         gameState.value.answers = {}
         gameState.value.answeringPlayerId = null
         gameState.value.advancedAnswer = null
         gameState.value.roundScores = {}
 
-        if (gameState.value.questionCards.length === 0) {
+        // Завершаем игру по лимиту раундов или когда закончились карты
+        if (currentRound.value > TOTAL_ROUNDS || gameState.value.questionCards.length === 0) {
           gamePhase.value = 'game_over'
           gameState.value.phase = 'game_over'
         } else {
@@ -1014,28 +1034,43 @@ export const useGameStore = defineStore('game', () => {
       const requiredGuesses = Math.max(0, playersCount - 1) // все кроме отвечающего
       const guessesCount = Object.keys(gameState.value.guesses).filter(pid => pid !== gameState.value.answeringPlayerId).length
 
-      // Когда получили все догадки, начисляем очки и переходим к advanced_results
+      // Когда получили все догадки, ПЕРЕХОДИМ В selecting_winners, без начисления очков
       if (guessesCount >= requiredGuesses) {
-        if (!gameState.value.roundScores) gameState.value.roundScores = {}
-        const correct = (gameState.value.advancedAnswer || '').trim().toLowerCase()
-
-        Object.entries(gameState.value.guesses).forEach(([pid, guess]) => {
-          if (pid !== gameState.value.answeringPlayerId) {
-            const ok = (guess || '').trim().toLowerCase() === correct && correct.length > 0
-            if (ok) {
-              gameState.value.roundScores![pid] = (gameState.value.roundScores![pid] || 0) + 1
-              gameState.value.scores[pid] = (gameState.value.scores[pid] || 0) + 1
-            } else {
-              gameState.value.roundScores![pid] = gameState.value.roundScores![pid] || 0
-            }
-          }
-        })
-
-        gamePhase.value = 'advanced_results'
-        gameState.value.phase = 'advanced_results'
+        gamePhase.value = 'selecting_winners'
+        gameState.value.phase = 'selecting_winners'
+        if (!gameState.value.roundWinners) gameState.value.roundWinners = []
       }
 
       broadcastGameState()
+    })
+
+    // Обработка выбора победителей в advanced от клиента (строгая авторизация: только автор ответа)
+    peerService.onMessage('submit_winners', (message) => {
+      if (!isHost.value) return
+      if ((gameState.value.gameMode ?? gameMode.value) !== 'advanced') return
+      if ((gameState.value.phase ?? gamePhase.value) !== 'selecting_winners') return
+
+      const payload = (message as Extract<PeerMessage, { type: 'submit_winners' }>).payload as any
+      const chooserId = payload?.chooserId as string | undefined
+      const rawWinners = (payload?.winners as string[] | undefined) || []
+
+      // Строгая проверка: выбирает только автор ответа
+      if (!chooserId || chooserId !== gameState.value.answeringPlayerId) return
+
+      // Нормализация winners: уникальные, только игроки с guesses, исключая chooserId
+      const validSet = new Set(
+        rawWinners
+          .filter(id =>
+            id &&
+            id !== chooserId &&
+            !!(gameState.value.guesses && gameState.value.guesses[id] !== undefined) &&
+            gameState.value.players.some(p => p.id === id)
+          )
+      )
+      const winners = Array.from(validSet)
+
+      // Применяем логику начисления и перехода фазы
+      submitWinners(winners)
     })
 
     // Добавляем обработчики host discovery
@@ -1129,9 +1164,11 @@ export const useGameStore = defineStore('game', () => {
   // Рассылка состояния игры всем участникам
   const broadcastGameState = () => {
     if (isHost.value) {
-      // Дублируем phase/режим в объект состояния для клиентов
-      gameState.value.phase = gamePhase.value
-      gameState.value.gameMode = gameMode.value
+    // Дублируем phase/режим в объект состояния для клиентов
+    gameState.value.phase = gamePhase.value
+    // Ведущий режим определяется по currentRound, синхронизируем из currentMode
+    gameMode.value = currentMode.value
+    gameState.value.gameMode = currentMode.value
 
       // Всегда шлем свежую копию, чтобы избежать мутаций по ссылке у клиентов
       const snapshot = { ...gameState.value }
@@ -3019,6 +3056,64 @@ export const useGameStore = defineStore('game', () => {
   }
 
   // Любой игрок (хост или клиент) может запросить следующий раунд после консенсуса
+  // Выбор победителей в advanced: делает только автор правильного ответа (answeringPlayerId)
+  const submitWinners = (winnerIds: string[]) => {
+    if (!isHost.value) return
+
+    // Ведем проверку по состоянию в gameState приоритетно
+    const mode = gameState.value.gameMode ?? gameMode.value
+    const phase = gameState.value.phase ?? gamePhase.value
+    if (mode !== 'advanced') return
+    if (phase !== 'selecting_winners') return
+
+    const chooserId = gameState.value.answeringPlayerId
+    if (!chooserId) return
+
+    // Нормализуем winners на стороне хоста: уникальные, только те у кого есть валидная догадка в текущем раунде,
+    // исключая chooserId и игроков без догадки
+    const validSet = new Set(
+      (winnerIds || []).filter(id =>
+        id &&
+        id !== chooserId &&
+        // есть догадка именно в этом раунде
+        !!(gameState.value.guesses && typeof gameState.value.guesses[id] === 'string' && gameState.value.guesses[id].trim().length > 0) &&
+        // игрок существует
+        gameState.value.players.some(p => p.id === id)
+      )
+    )
+    const winners = Array.from(validSet)
+
+    if (!gameState.value.roundScores) gameState.value.roundScores = {}
+    gameState.value.roundWinners = winners
+
+    // Начисляем по 1 баллу каждому выбранному (только тем, кто отправил догадку)
+    winners.forEach(pid => {
+      gameState.value.roundScores![pid] = (gameState.value.roundScores![pid] || 0) + 1
+      gameState.value.scores[pid] = (gameState.value.scores[pid] || 0) + 1
+    })
+
+    // Переходим к итогам advanced
+    gamePhase.value = 'advanced_results'
+    gameState.value.phase = 'advanced_results'
+    broadcastGameState()
+  }
+
+  // Клиентский хелпер для отправки победителей
+  const clientSubmitWinners = (winnerIds: string[]) => {
+    if (isHost.value) {
+      submitWinners(winnerIds)
+    } else {
+      peerService.sendMessage(
+        hostId.value,
+        makeMessage(
+          'submit_winners',
+          { chooserId: myPlayerId.value, winners: winnerIds },
+          { roomId: roomId.value || gameState.value.roomId, fromId: myPlayerId.value, ts: Date.now() }
+        )
+      )
+    }
+  }
+
   const clientNextRound = () => {
     if (isHost.value) {
       // Хост выполняет локально ту же логику
@@ -3092,6 +3187,7 @@ export const useGameStore = defineStore('game', () => {
     sendBet: clientSubmitBet,
     sendAnswer: clientSubmitAnswer,
     sendGuess: clientSubmitGuess,
+    sendWinners: clientSubmitWinners,
     nextRound: clientNextRound,
 
     // Advanced mode actions (удерживаем, но использовать следует клиентские обертки)

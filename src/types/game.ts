@@ -18,6 +18,7 @@ export type GamePhase =
   | 'results'
   | 'answering'
   | 'guessing'
+  | 'selecting_winners'
   | 'advanced_results'
   | 'game_over';
 
@@ -57,6 +58,9 @@ export interface GameState {
   advancedAnswer?: string | null
   answers?: Record<string, string>
   guesses?: Record<string, string>
+
+  // Advanced winners selection
+  roundWinners?: string[]
 
   // Финал
   winnerName?: string | null
@@ -122,6 +126,7 @@ export type SubmitBetMessage = BaseMessage<'submit_bet', SubmitBetPayload>
 export type SubmitAnswerMessage = BaseMessage<'submit_answer', SubmitAnswerPayload>
 export type SubmitGuessMessage = BaseMessage<'submit_guess', SubmitGuessPayload>
 export type NextRoundRequestMessage = BaseMessage<'next_round_request', { playerId: string }>
+export type SubmitWinnersMessage = BaseMessage<'submit_winners', { chooserId: string; winners: string[] }>
 
 // Дискриминируемый юнион всех сообщений
 export type PeerMessage =
@@ -155,6 +160,7 @@ export type PeerMessage =
   | SubmitAnswerMessage
   | SubmitGuessMessage
   | NextRoundRequestMessage
+  | SubmitWinnersMessage
 
 // Утилита для конструирования исходящих сообщений
 export function makeMessage<TType extends PeerMessage['type']>(

@@ -11,7 +11,7 @@
       <!-- Верхняя панель состояния -->
       <div class="game-info">
         <p class="players-count">
-          Игроков: {{ players.length }} • Мой ID: {{ myIdShort }} • {{ isHost ? 'Хост' : 'Клиент' }}
+          Игроков: {{ players.length }} • Я: {{ myNickname }} (ID: {{ myIdShort }}) • {{ isHost ? 'Хост' : 'Клиент' }}
         </p>
         <div class="status-info">
           <div class="connection-status" :class="connectionStatusClass">
@@ -123,6 +123,37 @@
         <p v-else>Ждем догадки других игроков…</p>
       </div>
 
+      <!-- Выбор победителей (advanced) -->
+      <div v-else-if="phase === 'selecting_winners'" class="phase-block">
+        <h2>Выберите близкие по смыслу ответы</h2>
+        <p>Выбирает: {{ currentTurnName }}</p>
+        <div v-if="isChooser" class="winners-select">
+          <p>Отметьте одного или нескольких игроков. Каждый выбранный получит +1 балл.</p>
+          <div class="players-list">
+            <button
+              v-for="p in selectablePlayers"
+              :key="p.id"
+              :class="{ selected: selectedWinners.includes(p.id) }"
+              @click="toggleWinner(p.id)"
+            >
+              {{ p.nickname }} — {{ guesses[p.id] || 'нет ответа' }}
+            </button>
+          </div>
+          <div class="winners-actions">
+            <button :disabled="selectedWinners.length === 0" @click="onSendWinners">Подтвердить выбор</button>
+            <button :disabled="selectedWinners.length > 0" @click="onSendNoWinners">Никто не угадал</button>
+          </div>
+        </div>
+        <div v-else>
+          <p>Ожидаем, пока {{ currentTurnName }} выберет победителей…</p>
+          <ul>
+            <li v-for="p in players" :key="p.id">
+              {{ p.nickname }} — {{ guesses[p.id] || 'нет ответа' }}
+            </li>
+          </ul>
+        </div>
+      </div>
+
       <!-- Результаты -->
       <div v-else-if="phase === 'results' || phase === 'advanced_results'" class="results-block">
         <h2>Результаты раунда</h2>
@@ -179,7 +210,7 @@ const gameStore = useGameStore()
 
 // Чтение стора
 const phase = computed(() => gameStore.gameState.phase || 'lobby')
-const gameMode = computed(() => gameStore.gameMode)
+const gameMode = computed(() => (gameStore.gameState.gameMode as 'basic' | 'advanced' | undefined) || (gameStore.gameMode as 'basic' | 'advanced'))
 const players = computed(() => gameStore.gameState.players)
 const roomId = computed(() => gameStore.gameState.roomId)
 const myId = computed(() => gameStore.myPlayerId as string)
@@ -215,6 +246,7 @@ const alreadyGuessed = computed(() => !!guesses.value[myId.value])
 const otherPlayers = computed(() => players.value.filter((p: any) => p.id !== myId.value))
 const isMyTurn = computed(() => currentTurnPlayerId.value === myId.value)
 const isAnswering = computed(() => !!answeringPlayerId.value && answeringPlayerId.value === myId.value)
+const isChooser = computed(() => myId.value === (answeringPlayerId.value ?? ''))
 const answeringName = computed(() => players.value.find((p: any) => p.id === answeringPlayerId.value)?.nickname || '—')
 
 // Тексты состояния соединения
@@ -240,6 +272,7 @@ const connectionStatusClass = computed(() => {
 })
 
 const myIdShort = computed(() => myId.value ? myId.value.slice(0, 6) : '—')
+const myNickname = computed(() => players.value.find(p => p.id === myId.value)?.nickname || '—')
 const phaseLabel = computed(() => phase.value)
 
 // Доступности
@@ -282,6 +315,32 @@ const onSendGuess = () => {
   if (guess.value && !isAnswering.value && !alreadyGuessed.value) {
     gameStore.sendGuess(guess.value)
   }
+}
+const selectedWinners = ref<string[]>([])
+const selectablePlayers = computed(() =>
+  // Только игроки, у которых есть guess, исключая автора ответа (chooser) и самого себя (на клиенте)
+  players.value.filter(p =>
+    p.id !== (answeringPlayerId.value ?? '') &&
+    p.id !== myId.value &&
+    !!guesses.value[p.id]
+  )
+)
+const toggleWinner = (pid: string) => {
+  if (!isChooser.value) return
+  if (selectedWinners.value.includes(pid)) {
+    selectedWinners.value = selectedWinners.value.filter(id => id !== pid)
+  } else {
+    selectedWinners.value.push(pid)
+  }
+}
+const onSendWinners = () => {
+  if (!isChooser.value || selectedWinners.value.length === 0) return
+  gameStore.sendWinners([...selectedWinners.value])
+}
+const onSendNoWinners = () => {
+  if (!isChooser.value) return
+  // Завершить раунд без победителей — отправляем пустой список
+  gameStore.sendWinners([])
 }
 const onFinishRound = () => {
   // Разрешаем нажимать «Следующий раунд» кому угодно: хост выполнит локально, клиент отправит запрос next_round_request
@@ -605,6 +664,12 @@ watch([() => gameStore.gameState.gameStarted, myId], ([started, id]: [boolean | 
   background: #f7f9fc;
   border: 1px solid #e6ecf5;
   font-weight: 600;
+}
+
+.winners-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
 }
 
 /* Адаптивность */
