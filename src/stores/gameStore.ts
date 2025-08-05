@@ -36,7 +36,7 @@ import {
  */
 const GAME_PREFIX = '__game_'
 const SESSION_STORAGE_KEY = `${GAME_PREFIX}sessionData`
-const HOST_STATE_STORAGE_KEY = `${GAME_PREFIX}hostStateSnapshot`
+const HOST_STATE_STORAGE_KEY = `${GAME_PREFIX}hostGameStateSnapshot`
 const ROOM_ID_STORAGE_KEY = `${GAME_PREFIX}roomId`
 const SESSION_TIMEOUT = 30 * 60 * 1000 // 30 минут
 
@@ -2084,12 +2084,16 @@ export const useGameStore = defineStore('game', () => {
     proposedHostId: string | null
     votes: Map<string, 'approve' | 'reject'>
     timeout: number | null
+    // Расширение: жёсткая блокировка экстренного захвата,
+    // когда детерминированный новый хост уже определён и это не мы
+    emergencyLock?: boolean
   }>({
     inProgress: false,
     phase: null,
     proposedHostId: null,
     votes: new Map(),
-    timeout: null
+    timeout: null,
+    emergencyLock: false
   })
 
   // Простая система переподключения к отключившемуся хосту
@@ -2593,20 +2597,22 @@ export const useGameStore = defineStore('game', () => {
 
   // Выбор нового хоста из валидных игроков
   const electNewHostFromValidPlayers = (validPlayers: Player[]): Player => {
-    // Сортируем по nickname для детерминированности (как в electHostDeterministic)
-    const sortedPlayers = validPlayers.sort((a: Player, b: Player) => a.nickname.localeCompare(b.nickname))
+    // Новый критерий: минимальный players[i].id (peerId) лексикографически
+    const sortedPlayers = validPlayers
+      .slice()
+      .sort((a: Player, b: Player) => a.id.localeCompare(b.id))
 
     if (sortedPlayers.length === 0) {
       throw new Error('No valid players for host election')
     }
 
-      console.log('🔍 HOST ELECTION ALGORITHM:', {
-        validPlayers: (validPlayers as Player[]).map((p: Player) => ({id: p.id, nickname: p.nickname})),
-        sortedPlayers: (sortedPlayers as Player[]).map((p: Player) => ({id: p.id, nickname: p.nickname})),
-        selectedHost: sortedPlayers[0],
-        myPlayerId: myPlayerId.value,
-        amISelected: sortedPlayers[0].id === myPlayerId.value
-      })
+    console.log('🔍 HOST ELECTION ALGORITHM:', {
+      validPlayers: (validPlayers as Player[]).map((p: Player) => ({ id: p.id, nickname: p.nickname })),
+      sortedPlayers: (sortedPlayers as Player[]).map((p: Player) => ({ id: p.id, nickname: p.nickname })),
+      selectedHost: sortedPlayers[0],
+      myPlayerId: myPlayerId.value,
+      amISelected: sortedPlayers[0].id === myPlayerId.value
+    })
 
     return sortedPlayers[0]
   }
@@ -3030,23 +3036,26 @@ export const useGameStore = defineStore('game', () => {
 
   // Детерминированный выбор хоста без голосования (fallback)
   const electHostDeterministic = (validPlayers: Player[]): string => {
-    // Сортируем игроков по никнейму для консистентности
-    const sortedPlayers = validPlayers.sort((a: Player, b: Player) => a.nickname.localeCompare(b.nickname))
+    // Новый критерий: минимальный players[i].id (peerId)
+    const sortedPlayers = validPlayers
+      .slice()
+      .sort((a: Player, b: Player) => a.id.localeCompare(b.id))
 
     if (sortedPlayers.length === 0) {
       throw new Error('No valid players for deterministic host election')
     }
 
-    // Первый по никнейму становится хостом
     const deterministicHostId = sortedPlayers[0].id
-    console.log('Deterministic host elected:', deterministicHostId, 'nickname:', sortedPlayers[0].nickname)
+    console.log('Deterministic host elected by min id:', deterministicHostId, {
+      selectedNickname: sortedPlayers[0].nickname
+    })
 
     return deterministicHostId
   }
 
   // Детерминированный алгоритм выборов нового хоста
   const electNewHost = (): string => {
-    // Сортируем игроков по ID для детерминированности
+    // Критерий подтвержден: минимальный players[i].id
     const remainingPlayers = gameState.value.players
       .filter((p: Player) => p.id !== (gameState.value.hostId || ''))
       .sort((a: Player, b: Player) => a.id.localeCompare(b.id))
@@ -3055,9 +3064,8 @@ export const useGameStore = defineStore('game', () => {
       throw new Error('No remaining players for host election')
     }
 
-    // Первый в отсортированном списке становится хостом
     const newHostId = remainingPlayers[0].id
-    console.log('New host elected:', newHostId)
+    console.log('New host elected by min id:', newHostId)
 
     return newHostId
   }
@@ -3178,6 +3186,11 @@ export const useGameStore = defineStore('game', () => {
   // Переподключение к новому хосту
   const reconnectToNewHost = async (newHostId: string) => {
     console.log('Reconnecting to new host:', newHostId)
+
+    // Если детерминированный кандидат определен и этот клиент не он — не инициируем emergency takeover
+    if (newHostId && newHostId !== myPlayerId.value) {
+      migrationState.value.emergencyLock = true
+    }
 
     connectionStatus.value = 'connecting'
 
@@ -3408,6 +3421,9 @@ export const useGameStore = defineStore('game', () => {
     }
   }
 
+  // Дет-выбор кандидата по минимальному players[].id
+  // (удалено: дублировало реализацию ниже)
+
   // Универсальный опрос для обнаружения текущего хоста (более агрессивная стратегия)
   const universalHostDiscovery = async (sessionData: SessionData): Promise<HostDiscoveryResponsePayload | null> => {
     console.log('Starting universal host discovery...')
@@ -3430,6 +3446,21 @@ export const useGameStore = defineStore('game', () => {
       if (discoveredFromPlayers) {
         return discoveredFromPlayers
       }
+    }
+
+    // Детерминированный кандидат по минимальному id среди АКТУАЛЬНЫХ игроков (если хост ушёл насовсем)
+    const nonHostPlayers = (gameState.value.players || []).filter(p => !!p && p.id)
+    const deterministicCandidate = getMinIdHostCandidate(nonHostPlayers)
+    if (deterministicCandidate) {
+      console.log('Universal host discovery fallback selected deterministic candidate by min id:', deterministicCandidate.id)
+      return {
+        responderId: deterministicCandidate.id,
+        responderToken: deterministicCandidate.authToken || '',
+        isHost: false,
+        currentHostId: deterministicCandidate.id,
+        gameState: gameState.value,
+        timestamp: Date.now()
+      } as any
     }
 
     console.log('Universal host discovery failed - no active host found')
@@ -4050,10 +4081,50 @@ export const useGameStore = defineStore('game', () => {
       // Не трогаем ROOM_ID_STORAGE_KEY здесь, чтобы при случайной перезагрузке вкладки хоста roomId сохранялся
     }
 
+    // Отключаемся от сети и чистим сессию/хранилище
     peerService.disconnect()
     clearSession()
+    // Чистим все game-префикс ключи, никнейм сохраняется отдельно (без префикса)
+    removeGameItemsByPrefix(GAME_PREFIX)
 
-    // Сброс состояния
+    // Полный сброс Pinia state к дефолту
+    // 1) Базовые refs
+    myPlayerId.value = ''
+    isHost.value = false
+    hostId.value = ''
+    roomId.value = ''
+    connectionStatus.value = 'disconnected'
+    gameMode.value = 'basic'
+    gamePhase.value = 'lobby'
+    currentRound.value = 1
+
+    // 2) Никнейм сохраняем в отдельном ключе, затем очищаем локальный ref
+    if (!myNickname.value.startsWith(NICKNAME_PREFIX)) {
+      try { localStorage.setItem('savedNickname', myNickname.value || generateDefaultNickname()) } catch {}
+    }
+    myNickname.value = ''
+
+    // 3) Сброс версии/синхронизации
+    currentVersion.value = 0
+    initReceived.value = false
+    lastServerTime.value = 0
+    pendingDiffs.value.clear()
+    if (_snapshotTimeoutHandle) {
+      clearTimeout(_snapshotTimeoutHandle)
+      _snapshotTimeoutHandle = null
+    }
+    _acceptLegacyAsInit.value = false
+    gotFreshState.value = false
+
+    // 4) Сброс миграционного состояния
+    resetMigrationState()
+    try {
+      if (peerService.isInHostRecoveryGracePeriod()) {
+        peerService.cancelHostRecoveryGracePeriod()
+      }
+    } catch {}
+
+    // 5) Сброс состояния игры к дефолту
     gameState.value = {
       roomId: '',
       gameStarted: false,
@@ -4075,17 +4146,10 @@ export const useGameStore = defineStore('game', () => {
       bets: {}
     }
 
-    myPlayerId.value = ''
-    if (!myNickname.value.startsWith(NICKNAME_PREFIX)) {
-      localStorage.setItem('savedNickname', myNickname.value || generateDefaultNickname())
-    }
-    myNickname.value = ''
-    // При выходе чистим игровые записи, никнейм оставляем
-    removeGameItemsByPrefix(GAME_PREFIX)
-    isHost.value = false
-    hostId.value = ''
-    roomId.value = ''
-    connectionStatus.value = 'disconnected'
+    // 6) Сброс любых runtime-хранилищ снапшотов
+    try { localStorage.removeItem(HOST_STATE_STORAGE_KEY) } catch {}
+
+    console.log('✅ Pinia state fully reset to defaults after leaving room')
   }
 
   // Доступность и локализация: вычисляемые помощники для UI
@@ -4290,6 +4354,12 @@ export const useGameStore = defineStore('game', () => {
     }
   }
 
+  // Удалено: повторное объявление migrationState (вызывало TS-ошибку "Cannot redeclare")
+  // Если нужно глобально кешировать — можно привязать ссылку без повторного объявления:
+  try {
+    (globalThis as any).__migrationState = (globalThis as any).__migrationState || migrationState.value
+  } catch {}
+
   const clientNextRound = () => {
     if (isHost.value) {
       // Хост выполняет локально ту же логику
@@ -4328,6 +4398,187 @@ export const useGameStore = defineStore('game', () => {
   const uiConnecting = computed<boolean>(() => {
     return connectionStatus.value === 'connecting' || restorationState.value !== 'idle'
   })
+
+  // ===== ДЕТЕРМИНИРОВАННАЯ ЭЛЕКЦИЯ ХОСТА ПО МИНИМАЛЬНОМУ ID =====
+
+  // Находит игрока с минимальным id (строковое сравнение, id === peerId)
+  function getMinIdHostCandidate(players: Player[]): Player | null {
+    if (!players || players.length === 0) return null
+    const sorted = [...players].sort((a, b) => (a.id || '').localeCompare(b.id || ''))
+    return sorted[0] || null
+  }
+
+  // Отправка клиентам уведомления о новом хосте
+  function broadcastNewHostId(newHostId: string) {
+    try {
+      const msg = makeMessage(
+        'new_host_id' as any,
+        {
+          roomId: roomId.value || gameState.value.roomId,
+          newHostId
+        } as any,
+        { roomId: roomId.value || gameState.value.roomId, fromId: myPlayerId.value, ts: Date.now() }
+      )
+      peerService.broadcastMessage(msg)
+      console.log('📢 Broadcasted new_host_id:', newHostId)
+    } catch (e) {
+      console.warn('Failed to broadcast new_host_id', e)
+    }
+  }
+
+  // Ожидание подтверждений от клиентов, что они обновили у себя нового хоста
+  async function waitClientsAckNewHost(newHostId: string, timeoutMs = 3000): Promise<void> {
+    return new Promise((resolve) => {
+      const expectedIds = new Set<string>(
+        (gameState.value.players || [])
+          .map(p => p.id)
+          .filter(pid => pid && pid !== newHostId)
+      )
+      if (expectedIds.size === 0) {
+        resolve()
+        return
+      }
+
+      const handler = (m: any) => {
+        try {
+          if ((m as any).type !== 'client_host_update_ack') return
+          const payload = (m as any).payload || {}
+          if (!payload || payload.hostId !== newHostId) return
+          const from = m.meta?.fromId
+          if (from && expectedIds.has(from)) {
+            expectedIds.delete(from)
+            if (expectedIds.size === 0) {
+            }
+          }
+        } catch {}
+      }
+
+      // Регистрируем временный обработчик ACK
+      peerService.onMessage('client_host_update_ack', handler as any)
+
+      // Таймаут ожидания
+      setTimeout(() => {
+        try {
+          peerService.clearMessageHandlers()
+          setupHostMessageHandlers()
+          setupMeshProtocolHandlers()
+        } catch {}
+        console.warn('Timeout waiting for client_host_update_ack, continuing...')
+        resolve()
+      }, timeoutMs)
+    })
+  }
+
+  // Публикуем полный снимок состояния всем клиентам (новый хост)
+  function hostBroadcastFullSnapshot() {
+    try {
+      const payload: any = {
+        meta: {
+          roomId: roomId.value || gameState.value.roomId,
+          version: currentVersion.value || 0,
+          serverTime: Date.now()
+        },
+        state: { ...gameState.value }
+      }
+      // Отправляем индивидуально всем известным коннектам
+      peerService.getConnectedPeers().forEach(pid => {
+        try { peerService.hostSendSnapshot(pid, payload) } catch {}
+      })
+      console.log('📤 New host broadcasted state_snapshot to all clients')
+    } catch (e) {
+      console.warn('Failed to broadcast full snapshot by new host', e)
+    }
+  }
+
+  // Поднять себя в хосты и разослать всем уведомления + снапшот
+  async function promoteToHostDeterministic(): Promise<void> {
+    // Восстановить как хост (создает Peer/ID, включает heartbeat хоста)
+    await restoreAsHost()
+
+    // В состоянии hostId должен быть установлен на новый peer id
+    const newHostPeerId = myPlayerId.value
+    // Важный момент: в players[] мой объект уже должен иметь мой новый id (restoreAsHost делает это)
+
+    // Разослать new_host_id
+    broadcastNewHostId(newHostPeerId)
+
+    // Дать клиентам ack'нуть получение нового хоста
+    await waitClientsAckNewHost(newHostPeerId, 2000)
+
+    // Разослать state_snapshot, чтобы клиенты обновили список игроков/hostId
+    hostBroadcastFullSnapshot()
+    console.log('✅ Deterministic host promotion finalized with snapshot')
+  }
+
+  // Обработчик смены хоста на стороне клиента:
+  function setupClientNewHostHandlers() {
+    // Клиентский обработчик new_host_id
+    peerService.onMessage('new_host_id', (message) => {
+      const payload = (message as any).payload || {}
+      const newHost = payload.newHostId as string
+      const rid = payload.roomId as string
+      console.log('📥 CLIENT received new_host_id:', newHost)
+
+      // Обновляем локальный hostId
+      if (newHost) {
+        hostId.value = newHost
+        gameState.value.hostId = newHost
+      }
+      if (rid && !roomId.value) {
+        roomId.value = rid
+      }
+
+      // Отправляем подтверждение обратно новому хосту
+      try {
+        peerService.sendMessage(
+          newHost,
+          makeMessage(
+            'client_host_update_ack' as any,
+            { hostId: newHost, ok: true } as any,
+            { roomId: roomId.value || gameState.value.roomId, fromId: myPlayerId.value, ts: Date.now() }
+          )
+        )
+        console.log('📤 CLIENT sent client_host_update_ack to:', newHost)
+      } catch (e) {
+        console.warn('Failed to send client_host_update_ack', e)
+      }
+
+      // Переключаемся в режим клиента и переподключаемся к новому хосту при необходимости
+      isHost.value = false
+      try {
+        // не ломаем текущие соединения, основной канал к хосту переустановит restoreAsClient путь позже
+      } catch {}
+    })
+  }
+
+  // Жёсткие гарантии против двойного takeover:
+  // 1) если выбран детерминированный хост по min(id) и это НЕ мы — запрещаем emergency takeover
+  function shouldBlockEmergencyTakeover(): boolean {
+    try {
+      const players = (gameState.value.players || []).filter(Boolean)
+      const candidate = getMinIdHostCandidate(players)
+      if (candidate && candidate.id !== myPlayerId.value) {
+        return true
+      }
+      return false
+    } catch {
+      return false
+    }
+  }
+
+  // Патч места, где может запускаться emergency takeover: если блок активен — выходим
+  const _origBecomeNewHostWithRecovery = (async () => {}) as any
+  // защитный хук — используйте в местах emergency takeover перед promoteToHost
+  const guardEmergencyOrPromote = async (promote: () => Promise<void>) => {
+    if (migrationState.value.emergencyLock || shouldBlockEmergencyTakeover()) {
+      console.log('🛑 Emergency takeover blocked due to deterministic host selection')
+      return
+    }
+    await promote()
+  }
+
+  // Инициализация клиентских обработчиков для new_host_id (только однажды при создании стора)
+  try { setupClientNewHostHandlers() } catch {}
 
   return {
     // State
