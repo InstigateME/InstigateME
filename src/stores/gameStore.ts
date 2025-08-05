@@ -639,14 +639,22 @@ export const useGameStore = defineStore('game', () => {
     gameState.value.players.length < gameState.value.maxPlayers || !gameState.value.gameStarted
   )
 
-  // Генерация случайного цвета
-  const generateRandomColor = (): string => {
-    const colors = [
-      '#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7',
-      '#DDA0DD', '#98D8C8', '#F7DC6F', '#BB8FCE', '#85C1E9'
-    ]
-    return colors[Math.floor(Math.random() * colors.length)]
-  };
+  // Предустановленная палитра из 8 контрастных цветов (WCAG-friendly)
+  const PLAYER_COLORS: string[] = [
+    '#FF6B6B', // Red
+    '#4ECDC4', // Teal
+    '#45B7D1', // Blue
+    '#C7F464', // Lime
+    '#FFA500', // Orange
+    '#AA66CC', // Purple
+    '#FFD93D', // Yellow
+    '#2ECC71'  // Green
+  ]
+
+  // Определение цвета по индексy присоединения (детерминированно, циклически)
+  const getColorByIndex = (index: number): string => {
+    return PLAYER_COLORS[index % PLAYER_COLORS.length]
+  }
 
   // Генерация никнейма по умолчанию
   const NICKNAME_PREFIX = 'Player'
@@ -797,16 +805,16 @@ export const useGameStore = defineStore('game', () => {
     }
 
         // Добавляем хоста в список игроков
-        const hostPlayer: Player = {
-          id: restoredPeerId,
-          nickname,
-          color: generateRandomColor(),
-          isHost: true,
-          joinedAt: now,
-          authToken: generateAuthToken(restoredPeerId, targetRoomId, now),
-          votingCards: ['Голос 1', 'Голос 2'],
-          bettingCards: ['0', '±', '+']
-        }
+          const hostPlayer: Player = {
+            id: restoredPeerId,
+            nickname,
+            color: getColorByIndex(0),
+            isHost: true,
+            joinedAt: now,
+            authToken: generateAuthToken(restoredPeerId, targetRoomId, now),
+            votingCards: ['Голос 1', 'Голос 2'],
+            bettingCards: ['0', '±', '+']
+          }
 
         gameState.value.players = [hostPlayer]
       }
@@ -1275,10 +1283,11 @@ export const useGameStore = defineStore('game', () => {
 
       // Создаем нового игрока только если такого никнейма нет
       const now = Date.now()
+      const newPlayerIndex = gameState.value.players.length // индекс нового игрока в текущем составе
       const newPlayer: Player = {
         id: conn.peer,
         nickname,
-        color: generateRandomColor(),
+        color: getColorByIndex(newPlayerIndex),
         isHost: false,
         joinedAt: now,
         authToken: generateAuthToken(conn.peer, gameState.value.roomId, now),
