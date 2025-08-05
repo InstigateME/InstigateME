@@ -23,6 +23,7 @@ class PeerService {
   private heartbeatInterval: number | null = null
   private heartbeatTimers: Map<string, number> = new Map()
   private isHostRole: boolean = false
+  private currentRoomId: string | null = null
   private lastHeartbeatReceived: number = 0
   
   // Callback для обнаружения отключения хоста
@@ -258,20 +259,22 @@ class PeerService {
   
   // Проверка, является ли пир хостом
   isHost(): boolean {
-    // Хост - это тот, кто создал комнату и слушает входящие соединения
-    // У хоста может быть 0 или больше исходящих соединений к клиентам
-    return this.peer !== null && this.peer.open
+    // Истинная роль определяется явным флагом
+    return this.isHostRole
   }
   
   // Проверка, является ли пир клиентом
   isClient(): boolean {
-    // Клиент - это тот, кто подключился к хосту
-    return this.connections.size === 1 && this.peer !== null
+    // Клиент — это не-хост с активным peer
+    return !this.isHostRole && !!this.peer && !!this.peer.open
   }
   
   // Установка роли хоста и запуск heartbeat
-  setAsHost(hostId: string) {
+  setAsHost(hostId: string, roomId?: string) {
     this.isHostRole = true
+    if (roomId) {
+      this.currentRoomId = roomId
+    }
     this.startHeartbeat(hostId)
   }
   
@@ -297,7 +300,7 @@ class PeerService {
     this.heartbeatInterval = window.setInterval(() => {
       // Формируем meta для сообщения по требованиям BaseMessage
       const meta: MessageMeta = {
-        roomId: '', // TODO: подставить реальный roomId, если доступен в этом сервисе
+        roomId: this.currentRoomId || '',
         fromId: this.getMyId() || hostId,
         ts: Date.now()
       }
@@ -724,11 +727,10 @@ class PeerService {
     console.log('📢 Host recovery successful - cancelling migration and restoring connection')
     
     // Уведомляем gameStore о успешном восстановлении
-    if (this.onHostDisconnectedCallback) {
-      // Отправляем специальный сигнал о восстановлении хоста
+    if (this.onHostRecoveredCallback) {
       setTimeout(() => {
         console.log('🔄 Triggering host recovery success callback')
-        // Не вызываем обычный callback отключения, а используем специальный
+        this.onHostRecoveredCallback && this.onHostRecoveredCallback()
       }, 100)
     }
   }
@@ -847,6 +849,11 @@ class PeerService {
     this.clearHostPeerId(roomId)
   }
   
+  // Установка контекста комнаты (используется для заполнения meta.roomId в heartbeat)
+  setRoomContext(roomId: string | null) {
+    this.currentRoomId = roomId || null
+  }
+
   // Закрытие всех соединений
   disconnect() {
     this.stopHeartbeat()

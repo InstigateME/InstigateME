@@ -15,24 +15,34 @@
 
       <!-- Лобби -->
       <div v-if="phase === 'lobby'" class="waiting-block">
-        <p>Ожидание старта игры. Подключено игроков: {{ players.length }}.</p>
-        <div v-if="isHost" class="lobby-controls">
-          <button :disabled="!canStartBasic" @click="startBasic">Начать (basic)</button>
-          <button :disabled="!canStartBasic" @click="startAdvanced">Начать (advanced)</button>
-          <small v-if="!canStartBasic">Нужно минимум 3 игрока</small>
+        <!-- Если идет восстановление или пересинхронизация — не показываем лобби-текст, а статус -->
+        <div v-if="gameStore.connectionStatus !== 'connected'" class="reconnect-info">
+          <p>Переподключение… сохраняем состояние игры.</p>
         </div>
-        <div v-else>
-          <p>Ждем, пока хост начнет игру…</p>
-        </div>
-        <ul>
-          <li v-for="p in players" :key="p.id">
-            {{ p.nickname }} <span v-if="p.isHost">👑</span>
-          </li>
-        </ul>
+        <template v-else>
+          <p>Ожидание старта игры. Подключено игроков: {{ players.length }}.</p>
+          <div v-if="isHost" class="lobby-controls">
+            <button :disabled="!canStartBasic" @click="startBasic">Начать (basic)</button>
+            <button :disabled="!canStartBasic" @click="startAdvanced">Начать (advanced)</button>
+            <small v-if="!canStartBasic">Нужно минимум 3 игрока</small>
+          </div>
+          <div v-else>
+            <p>Ждем, пока хост начнет игру…</p>
+          </div>
+          <ul>
+            <li v-for="p in players" :key="p.id">
+              {{ p.nickname }} <span v-if="p.isHost">👑</span>
+            </li>
+          </ul>
+        </template>
       </div>
 
       <!-- Вытягивание вопроса -->
       <div v-else-if="phase === 'drawing_question'" class="phase-block draw-block">
+        <!-- Глобальная индикация переподключения внутри активной фазы -->
+        <div v-if="gameStore.connectionStatus !== 'connected'" class="reconnect-info" style="margin-bottom:10px">
+          Переподключение… сохраняем состояние игры.
+        </div>
         <div class="draw-header">
           <h2>Вытягивание вопроса</h2>
           <div class="turn-chip" :title="'Ходит игрок: ' + currentTurnName">
@@ -63,6 +73,10 @@
       <!-- Голосование (basic/advanced) -->
       <div v-else-if="phase === 'voting' || phase === 'secret_voting'"
            class="phase-block voting-block">
+        <!-- Глобальная индикация переподключения -->
+        <div v-if="gameStore.connectionStatus !== 'connected'" class="reconnect-info" style="margin-bottom:10px">
+          Переподключение… сохраняем состояние игры.
+        </div>
         <!-- Показываем карточку вопроса над голосованием, чтобы она не исчезала после вытягивания -->
         <div class="question-card question-card--large" v-if="currentQuestion">{{
             currentQuestion
@@ -102,6 +116,10 @@
 
       <!-- Ставки (basic) -->
       <div v-else-if="phase === 'betting'" class="phase-block betting-block">
+        <!-- Глобальная индикация переподключения -->
+        <div v-if="gameStore.connectionStatus !== 'connected'" class="reconnect-info" style="margin-bottom:10px">
+          Переподключение… сохраняем состояние игры.
+        </div>
         <div class="betting-header">
           <h2>Ставка</h2>
           <span class="bet-hint">Выберите один вариант</span>
@@ -133,6 +151,10 @@
 
       <!-- Ответ (advanced) -->
       <div v-else-if="phase === 'answering'" class="phase-block answering-block">
+        <!-- Глобальная индикация переподключения -->
+        <div v-if="gameStore.connectionStatus !== 'connected'" class="reconnect-info" style="margin-bottom:10px">
+          Переподключение… сохраняем состояние игры.
+        </div>
         <div class="answering-header">
           <h2>Ответ на вопрос</h2>
           <span class="answering-hint" v-if="isAnswering">Напишите короткий и ясный ответ</span>
@@ -156,6 +178,10 @@
 
       <!-- Догадки (advanced) -->
       <div v-else-if="phase === 'guessing'" class="phase-block guessing-block">
+        <!-- Глобальная индикация переподключения -->
+        <div v-if="gameStore.connectionStatus !== 'connected'" class="reconnect-info" style="margin-bottom:10px">
+          Переподключение… сохраняем состояние игры.
+        </div>
         <div class="guessing-header">
           <h2>Угадай ответ</h2>
           <span class="guessing-hint" v-if="!isAnswering">Попробуйте угадать максимально точно</span>
@@ -180,6 +206,10 @@
 
       <!-- Выбор победителей (advanced) -->
       <div v-else-if="phase === 'selecting_winners'" class="phase-block winners-block">
+        <!-- Глобальная индикация переподключения -->
+        <div v-if="gameStore.connectionStatus !== 'connected'" class="reconnect-info" style="margin-bottom:10px">
+          Переподключение… сохраняем состояние игры.
+        </div>
         <div class="winners-header">
           <h2>Выберите близкие по смыслу ответы</h2>
           <span class="winners-hint">Выбирает: <strong>{{ currentTurnName }}</strong></span>
@@ -236,6 +266,10 @@
 
       <!-- Результаты -->
       <div v-else-if="phase === 'results' || phase === 'advanced_results'" class="results-block">
+        <!-- Глобальная индикация переподключения -->
+        <div v-if="gameStore.connectionStatus !== 'connected'" class="reconnect-info" style="margin-bottom:10px">
+          Переподключение… сохраняем состояние игры.
+        </div>
         <h2>Результаты раунда</h2>
         <div v-if="phase === 'advanced_results' && advancedAnswer" class="advanced-answer">
           Ответ: <strong>{{ advancedAnswer }}</strong>
@@ -291,6 +325,10 @@
 
       <!-- Конец игры -->
       <div v-else-if="phase === 'game_over'" class="winner-block">
+        <!-- Глобальная индикация переподключения -->
+        <div v-if="gameStore.connectionStatus !== 'connected'" class="reconnect-info" style="margin-bottom:10px">
+          Переподключение… сохраняем состояние игры.
+        </div>
         <h2>Игра завершена</h2>
         <p>Победитель: {{ winnerNameComputed }}</p>
         <button v-if="isHost" @click="startBasic">Начать новую игру</button>
@@ -429,13 +467,24 @@ const gameStore = useGameStore()
 const showRules = ref(false)
 
 // Чтение стора
-const phase = computed(() => gameStore.gameState.phase || 'lobby')
+const phase = computed(() => {
+  // Если мы переподключаемся, не форсим 'lobby', оставляем последнюю известную фазу
+  const savedPhase = gameStore.gameState.phase
+  if (gameStore.connectionStatus !== 'connected' && savedPhase) {
+    return savedPhase
+  }
+  return savedPhase || 'lobby'
+})
 const gameMode = computed(() => (gameStore.gameState.gameMode as 'basic' | 'advanced' | undefined) || (gameStore.gameMode as 'basic' | 'advanced'))
 const players = computed(() => gameStore.gameState.players)
 const roomId = computed(() => gameStore.gameState.roomId)
 const myId = computed(() => gameStore.myPlayerId as string)
 const isHost = computed(() => gameStore.isHost as boolean)
-const canStartBasic = computed(() => gameStore.canStartGame as boolean)
+const canStartBasic = computed(() => {
+  // Во время переподключения нельзя показывать доступность старта
+  if (gameStore.connectionStatus !== 'connected') return false
+  return gameStore.canStartGame as boolean
+})
 const currentTurnIndex = computed(() => (gameStore.gameState.currentTurn ?? 0) as number)
 const currentTurnPlayerId = computed(() => (gameStore.gameState.currentTurnPlayerId ?? (players.value[currentTurnIndex.value]?.id ?? null)) as string | null)
 const currentTurnName = computed(() => players.value.find(p => p.id === currentTurnPlayerId.value)?.nickname || '—')
@@ -553,14 +602,22 @@ const isVoteDisabled = (pid: string) =>
   alreadyVoted.value || (selectedVotes.value.length >= 2 && !selectedVotes.value.includes(pid)) || pid === myId.value
 
 // Хэндлеры действий — используем клиентские обертки стора
-const startBasic = () => gameStore.startGame('basic')
-const startAdvanced = () => gameStore.startGame('advanced')
+const startBasic = () => {
+  if (gameStore.connectionStatus !== 'connected') return
+  gameStore.startGame('basic')
+}
+const startAdvanced = () => {
+  if (gameStore.connectionStatus !== 'connected') return
+  gameStore.startGame('advanced')
+}
 const onDrawQuestion = () => {
   // Защита: действие доступно только в свою очередь и при активном соединении
   if (!isMyTurn.value) return
+  if (gameStore.connectionStatus !== 'connected') return
   gameStore.drawQuestion()
 }
 const onSendVote = () => {
+  if (gameStore.connectionStatus !== 'connected') return
   if (selectedVotes.value.length > 0 && selectedVotes.value.length <= 2 && !alreadyVoted.value) {
     gameStore.sendVote([...selectedVotes.value])
   }
@@ -575,16 +632,19 @@ const onToggleVote = (id: string) => {
   }
 }
 const onSendBet = () => {
+  if (gameStore.connectionStatus !== 'connected') return
   if (bet.value && !alreadyBet.value) {
     gameStore.sendBet(bet.value)
   }
 }
 const onSendAnswer = () => {
+  if (gameStore.connectionStatus !== 'connected') return
   if (answer.value && isAnswering.value) {
     gameStore.sendAnswer(answer.value)
   }
 }
 const onSendGuess = () => {
+  if (gameStore.connectionStatus !== 'connected') return
   if (guess.value && !isAnswering.value && !alreadyGuessed.value) {
     gameStore.sendGuess(guess.value)
   }
@@ -607,15 +667,18 @@ const toggleWinner = (pid: string) => {
   }
 }
 const onSendWinners = () => {
+  if (gameStore.connectionStatus !== 'connected') return
   if (!isChooser.value || selectedWinners.value.length === 0) return
   gameStore.sendWinners([...selectedWinners.value])
 }
 const onSendNoWinners = () => {
+  if (gameStore.connectionStatus !== 'connected') return
   if (!isChooser.value) return
   // Завершить раунд без победителей — отправляем пустой список
   gameStore.sendWinners([])
 }
 const onFinishRound = () => {
+  if (gameStore.connectionStatus !== 'connected') return
   // Разрешаем нажимать «Следующий раунд» кому угодно: хост выполнит локально, клиент отправит запрос next_round_request
   gameStore.nextRound()
 }
@@ -2167,4 +2230,14 @@ watch([() => gameStore.gameState.gameStarted, myId], ([started, id]: [boolean | 
     font-size: 0.8rem;
   }
 }
+.reconnect-info {
+  background: #fff3cd;
+  color: #7a5d00;
+  border: 1px solid #ffe08a;
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-weight: 600;
+}
+
+/* остальной CSS ниже */
 </style>

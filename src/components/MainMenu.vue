@@ -112,11 +112,12 @@ onMounted(async () => {
 
       if (restored) {
         console.log('Session restored successfully, redirecting...')
-        // Перенаправляем на соответствующую страницу в зависимости от состояния игры
-        if (gameStore.gameState.gameStarted) {
-          await router.push('/game')
-        } else {
+        // Редирект строго по фазе: lobby -> /lobby, иначе -> /game
+        const phase = gameStore.gameState.phase ?? (gameStore.gameState.gameStarted ? 'drawing_question' : 'lobby')
+        if (phase === 'lobby' && !gameStore.gameState.gameStarted) {
           await router.push('/lobby')
+        } else {
+          await router.push('/game')
         }
       } else {
         console.log('Session restoration failed')

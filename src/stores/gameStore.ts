@@ -29,8 +29,14 @@ import {
   MESH_RESTORATION_DELAY
 } from '@/types/game'
 
-// Ключи для localStorage
+/**
+ * Персистентность и синхронизация
+ * - SESSION_STORAGE_KEY: локальная сессия игрока
+ * - HOST_STATE_STORAGE_KEY: снапшот состояния игры от хоста
+ */
 const SESSION_STORAGE_KEY = 'gameSessionData'
+const HOST_STATE_STORAGE_KEY = 'hostGameStateSnapshot'
+const ROOM_ID_STORAGE_KEY = 'persistentRoomId'
 const SESSION_TIMEOUT = 30 * 60 * 1000 // 30 минут
 
 interface SessionData extends ExtendedSessionData {
@@ -473,6 +479,25 @@ export const useGameStore = defineStore('game', () => {
     return `${adjective}-${noun}-${numbers}`
   }
 
+  // Устойчивое хранение roomId между перезагрузками хоста
+  const savePersistentRoomId = (rid: string) => {
+    try {
+      localStorage.setItem(ROOM_ID_STORAGE_KEY, rid)
+    } catch {}
+  }
+  const loadPersistentRoomId = (): string | null => {
+    try {
+      return localStorage.getItem(ROOM_ID_STORAGE_KEY)
+    } catch {
+      return null
+    }
+  }
+  const clearPersistentRoomId = () => {
+    try {
+      localStorage.removeItem(ROOM_ID_STORAGE_KEY)
+    } catch {}
+  }
+
   // Генерация токена безопасности
   const generateAuthToken = (playerId: string, roomId: string, timestamp: number): string => {
     const data = `${playerId}-${roomId}-${timestamp}-${Math.random()}`
@@ -504,7 +529,8 @@ export const useGameStore = defineStore('game', () => {
 
       if (existingSession && existingSession.isHost) {
         console.log('🔄 MANDATORY: Restoring host session for room:', existingSession.roomId)
-        targetRoomId = existingSession.roomId
+        // Пытаемся взять roomId из стабильного хранилища (источник правды)
+        targetRoomId = loadPersistentRoomId() || existingSession.roomId
 
         // ОБЯЗАТЕЛЬНО передаем roomId для восстановления peer ID из localStorage
         restoredPeerId = await peerService.createHost(targetRoomId)
@@ -513,7 +539,7 @@ export const useGameStore = defineStore('game', () => {
         myPlayerId.value = restoredPeerId
         myNickname.value = nickname
         isHost.value = true
-        roomId.value = existingSession.roomId
+        roomId.value = targetRoomId
         hostId.value = restoredPeerId
         gameState.value = {...existingSession.gameState}
         gameState.value.hostId = restoredPeerId
@@ -526,7 +552,8 @@ export const useGameStore = defineStore('game', () => {
         }
 
         connectionStatus.value = 'connected'
-        peerService.setAsHost(restoredPeerId)
+        peerService.setRoomContext(targetRoomId || gameState.value.roomId || null as any)
+      peerService.setAsHost(restoredPeerId, targetRoomId || gameState.value.roomId)
         setupHostMessageHandlers()
 
         console.log('🎉 Host fully restored with session data - ID:', restoredPeerId)
@@ -535,7 +562,10 @@ export const useGameStore = defineStore('game', () => {
       } else {
         // Создание полностью новой комнаты
         console.log('🆕 Creating brand new room')
-        targetRoomId = generateRoomId()
+        // Если ранее уже создавался roomId в этой вкладке — повторно используем
+        targetRoomId = loadPersistentRoomId() || generateRoomId()
+        // Сохраняем для будущих рестартов вкладки хоста
+        savePersistentRoomId(targetRoomId)
 
         // Передаем roomId даже для новой комнаты, чтобы сохранить peer ID
         restoredPeerId = await peerService.createHost(targetRoomId)
@@ -588,10 +618,15 @@ export const useGameStore = defineStore('game', () => {
       }
 
       connectionStatus.value = 'connected'
+      // Синхронизируем устойчивый roomId
+      if (roomId.value) savePersistentRoomId(roomId.value)
 
       // Устанавливаем роль хоста и запускаем heartbeat
-      peerService.setAsHost(restoredPeerId)
+      peerService.setRoomContext(targetRoomId || gameState.value.roomId || null as any)
+      peerService.setAsHost(restoredPeerId, targetRoomId || gameState.value.roomId)
       setupHostMessageHandlers()
+      // Сохраняем roomId для последующих перезагрузок
+      savePersistentRoomId(targetRoomId)
 
       console.log('🏁 Host initialization completed with ID:', restoredPeerId)
       return restoredPeerId
@@ -714,53 +749,133 @@ export const useGameStore = defineStore('game', () => {
           } : null
         })
 
-        if (existingPlayerBySavedId) {
-          console.log('✅ HOST: Found existing player by saved ID, updating connection:', {
-            savedId: savedPlayerId,
-            newConnectionId: conn.peer,
-            nickname: nickname
-          })
+      if (existingPlayerBySavedId) {
+        console.log('✅ HOST: Found existing player by saved ID, updating connection:', {
+          savedId: savedPlayerId,
+          newConnectionId: conn.peer,
+          nickname: nickname
+        })
 
-          // КРИТИЧНО: Если этот игрок был подсвечен, обновляем litUpPlayerId на новый ID
-          if (gameState.value.litUpPlayerId === savedPlayerId) {
-            console.log('🔄 HOST: Updating litUpPlayerId from old ID to new ID:', {
-              oldId: savedPlayerId,
-              newId: conn.peer
-            })
-            gameState.value.litUpPlayerId = conn.peer
-          }
+        // Полный ремап ID savedPlayerId -> conn.peer во всех полях состояния
+        const oldId = savedPlayerId
+        const newId = conn.peer
 
-          // Обновляем ID соединения существующего игрока
-          existingPlayerBySavedId.id = conn.peer
-          existingPlayerBySavedId.authToken = generateAuthToken(conn.peer, gameState.value.roomId, Date.now())
-
-          console.log('🎯 HOST: Broadcasting updated game state with new player info:', {
-            updatedPlayer: {id: existingPlayerBySavedId.id, nickname: existingPlayerBySavedId.nickname},
-            newLitUpPlayerId: gameState.value.litUpPlayerId,
-            totalPlayers: gameState.value.players.length
-          })
-
-          broadcastGameState()
-
-          // КРИТИЧНО: Отправляем специальное сообщение клиенту о смене его ID
-          peerService.sendMessage(
-            conn.peer,
-            makeMessage(
-              'player_id_updated',
-              {
-                oldId: savedPlayerId,
-                newId: conn.peer,
-                message: 'Your player ID has been updated due to reconnection'
-              },
-              { roomId: gameState.value.roomId, fromId: gameState.value.hostId, ts: Date.now() }
-            )
-          )
-
-          console.log('✅ HOST: Updated existing player and sent ID update notification:', existingPlayerBySavedId)
-          return
-        } else {
-          console.log('❌ HOST: No existing player found with savedPlayerId, will create new player')
+        // 1) litUpPlayerId
+        if (gameState.value.litUpPlayerId === oldId) {
+          console.log('🔄 HOST: Updating litUpPlayerId from old ID to new ID:', { oldId, newId })
+          gameState.value.litUpPlayerId = newId
         }
+
+        // 2) currentTurnPlayerId
+        if (gameState.value.currentTurnPlayerId === oldId) {
+          console.log('🔄 HOST: Updating currentTurnPlayerId from old ID to new ID:', { oldId, newId })
+          gameState.value.currentTurnPlayerId = newId
+        }
+
+        // 3) votes (ключи)
+        if (gameState.value.votes) {
+          const newVotes: Record<string, string[]> = {}
+          Object.entries(gameState.value.votes).forEach(([k, v]) => {
+            const mappedKey = k === oldId ? newId : k
+            // также заменим внутри массивов целевые ID, если кто-то голосовал за oldId
+            const mappedArray = (v || []).map(t => (t === oldId ? newId : t))
+            newVotes[mappedKey] = mappedArray
+          })
+          gameState.value.votes = newVotes
+        }
+
+        // 4) voteCounts (ключи)
+        if (gameState.value.voteCounts) {
+          const newCounts: Record<string, number> = {}
+          Object.entries(gameState.value.voteCounts).forEach(([k, v]) => {
+            const mappedKey = k === oldId ? newId : k
+            newCounts[mappedKey] = v
+          })
+          gameState.value.voteCounts = newCounts
+        }
+
+        // 5) bets (ключи)
+        if (gameState.value.bets) {
+          const newBets: Record<string, '0' | '+-' | '+'> = {}
+          Object.entries(gameState.value.bets).forEach(([k, v]) => {
+            const mappedKey = k === oldId ? newId : k
+            newBets[mappedKey] = v
+          })
+          gameState.value.bets = newBets
+        }
+
+        // 6) guesses (ключи и значения-цели)
+        if (gameState.value.guesses) {
+          const newGuesses: Record<string, string> = {}
+          Object.entries(gameState.value.guesses).forEach(([k, v]) => {
+            const mappedKey = k === oldId ? newId : k
+            const mappedVal = v === oldId ? newId : v
+            newGuesses[mappedKey] = mappedVal
+          })
+          gameState.value.guesses = newGuesses
+        }
+
+        // 7) scores / roundScores (ключи)
+        if (gameState.value.scores) {
+          const newScores: Record<string, number> = {}
+          Object.entries(gameState.value.scores).forEach(([k, v]) => {
+            const mappedKey = k === oldId ? newId : k
+            newScores[mappedKey] = v
+          })
+          gameState.value.scores = newScores
+        }
+        if (gameState.value.roundScores) {
+          const newRoundScores: Record<string, number> = {}
+          Object.entries(gameState.value.roundScores).forEach(([k, v]) => {
+            const mappedKey = k === oldId ? newId : k
+            newRoundScores[mappedKey] = v
+          })
+          gameState.value.roundScores = newRoundScores
+        }
+
+        // 8) roundWinners (массив ID)
+        if (Array.isArray(gameState.value.roundWinners) && gameState.value.roundWinners.length > 0) {
+          gameState.value.roundWinners = gameState.value.roundWinners.map(pid => (pid === oldId ? newId : pid))
+        }
+
+        // 9) answeringPlayerId
+        if (gameState.value.answeringPlayerId === oldId) {
+          gameState.value.answeringPlayerId = newId
+        }
+
+        // Обновляем ID и токен игрока в players
+        existingPlayerBySavedId.id = newId
+        existingPlayerBySavedId.nickname = nickname
+        existingPlayerBySavedId.authToken = generateAuthToken(newId, gameState.value.roomId, Date.now())
+
+        console.log('🎯 HOST: Broadcasting updated game state with full ID remap:', {
+          updatedPlayer: { id: existingPlayerBySavedId.id, nickname: existingPlayerBySavedId.nickname },
+          newLitUpPlayerId: gameState.value.litUpPlayerId,
+          newCurrentTurnPlayerId: gameState.value.currentTurnPlayerId,
+          totalPlayers: gameState.value.players.length
+        })
+
+        broadcastGameState()
+
+        // КРИТИЧНО: Отправляем специальное сообщение клиенту о смене его ID
+        peerService.sendMessage(
+          newId,
+          makeMessage(
+            'player_id_updated',
+            {
+              oldId,
+              newId,
+              message: 'Your player ID has been updated due to reconnection'
+            },
+            { roomId: gameState.value.roomId, fromId: gameState.value.hostId, ts: Date.now() }
+          )
+        )
+
+        console.log('✅ HOST: Updated existing player and sent ID update notification:', existingPlayerBySavedId)
+        return
+      } else {
+        console.log('❌ HOST: No existing player found with savedPlayerId, will create new player')
+      }
       } else {
         console.log('❌ HOST: No savedPlayerId provided in join_request')
       }
@@ -1094,6 +1209,17 @@ export const useGameStore = defineStore('game', () => {
 
       const newState = { ...(message as Extract<PeerMessage, { type: 'game_state_update' }>).payload }
 
+      // Немедленно кешируем снапшот состояния, полученный от хоста,
+      // чтобы после перезагрузки не «проваливаться» в лобби.
+      try {
+        localStorage.setItem(HOST_STATE_STORAGE_KEY, JSON.stringify({
+          ts: Date.now(),
+          state: newState
+        }))
+      } catch (e) {
+        console.warn('Failed to cache host snapshot on client', e)
+      }
+
       // КРИТИЧНО: Валидируем litUpPlayerId при получении обновления состояния
       if (newState.litUpPlayerId) {
         console.log('🔍 VALIDATING litUpPlayerId:', {
@@ -1164,14 +1290,24 @@ export const useGameStore = defineStore('game', () => {
   // Рассылка состояния игры всем участникам
   const broadcastGameState = () => {
     if (isHost.value) {
-    // Дублируем phase/режим в объект состояния для клиентов
-    gameState.value.phase = gamePhase.value
-    // Ведущий режим определяется по currentRound, синхронизируем из currentMode
-    gameMode.value = currentMode.value
-    gameState.value.gameMode = currentMode.value
+      // Дублируем phase/режим в объект состояния для клиентов
+      gameState.value.phase = gamePhase.value
+      // Ведущий режим определяется по currentRound, синхронизируем из currentMode
+      gameMode.value = currentMode.value
+      gameState.value.gameMode = currentMode.value
 
       // Всегда шлем свежую копию, чтобы избежать мутаций по ссылке у клиентов
       const snapshot = { ...gameState.value }
+
+      // Пишем снапшот хоста в localStorage, чтобы клиенты могли «якориться» после перезагрузки
+      try {
+        localStorage.setItem(HOST_STATE_STORAGE_KEY, JSON.stringify({
+          ts: Date.now(),
+          state: snapshot
+        }))
+      } catch (e) {
+        console.warn('Failed to persist host snapshot', e)
+      }
 
       peerService.broadcastMessage(
         makeMessage(
@@ -2004,6 +2140,10 @@ export const useGameStore = defineStore('game', () => {
     }
 
     // КРИТИЧНО: Передаем roomId для сохранения нового peer ID хоста
+    // Если по какой-то причине roomId пуст — пробуем взять устойчивый
+    if (!roomId.value) {
+      roomId.value = loadPersistentRoomId() || ''
+    }
     const newPeerId = await peerService.createHost(roomId.value)
 
     // Уведомляем всех о новом ID
@@ -2032,7 +2172,11 @@ export const useGameStore = defineStore('game', () => {
     }
 
     // Запускаем heartbeat
-    peerService.setAsHost(newPeerId)
+    peerService.setRoomContext(roomId.value || gameState.value.roomId || null as any)
+    peerService.setAsHost(newPeerId, roomId.value || gameState.value.roomId)
+    // Запускаем heartbeat
+    peerService.setRoomContext(roomId.value || gameState.value.roomId || null as any)
+    peerService.setAsHost(newPeerId, roomId.value || gameState.value.roomId)
 
     // Настраиваем обработчики для хоста
     setupHostMessageHandlers()
@@ -2243,6 +2387,9 @@ export const useGameStore = defineStore('game', () => {
       }
 
       // КРИТИЧНО: Передаем roomId для сохранения нового peer ID хоста
+      if (!roomId.value) {
+        roomId.value = loadPersistentRoomId() || ''
+      }
       const newPeerId = await peerService.createHost(roomId.value)
       myPlayerId.value = newPeerId
       gameState.value.hostId = newPeerId
@@ -2419,8 +2566,29 @@ export const useGameStore = defineStore('game', () => {
       restorationState.value = 'discovering'
       connectionStatus.value = 'connecting'
 
-      // Восстанавливаем локальное состояние
-      gameState.value = {...sessionData.gameState}
+      // Берем максимально свежий «якорь»: снапшот от хоста (если есть), иначе из своей сессии
+      let anchorState = sessionData.gameState
+      try {
+        const hostSnap = localStorage.getItem(HOST_STATE_STORAGE_KEY)
+        if (hostSnap) {
+          const parsed = JSON.parse(hostSnap) as { ts: number, state: GameState }
+          // Если room совпадает и снапшот свежий — используем его
+          if (parsed?.state?.roomId && parsed.state.roomId === sessionData.roomId) {
+            anchorState = parsed.state as any
+            console.log('Using cached host snapshot as anchor for restore')
+          }
+        }
+      } catch (e) {
+        console.warn('Failed to read host snapshot', e)
+      }
+
+      // Восстанавливаем локальное состояние из «якоря»
+      gameState.value = { ...anchorState }
+      // КРИТИЧНО: если фаза не 'lobby', считаем игру начатой
+      if ((gameState.value.phase ?? 'lobby') !== 'lobby') {
+        gameState.value.gameStarted = true
+      }
+
       myPlayerId.value = sessionData.myPlayerId
       myNickname.value = sessionData.myNickname
       roomId.value = sessionData.roomId
@@ -2756,7 +2924,23 @@ export const useGameStore = defineStore('game', () => {
   const restoreAsHost = async () => {
     console.log('Restoring as host...')
 
+    // Если фаза не лобби — убеждаемся, что флаг запущенности установлен
+    if ((gameState.value.phase ?? 'lobby') !== 'lobby') {
+      gameState.value.gameStarted = true
+    }
+
+    // Перед любыми рассылками синхронизируем phase/gameMode с локальными рефами
+    if (gameState.value.phase) {
+      gamePhase.value = gameState.value.phase as any
+    }
+    if (gameState.value.gameMode) {
+      gameMode.value = gameState.value.gameMode as any
+    }
+
     // КРИТИЧНО: Передаем roomId для восстановления сохраненного peer ID
+    if (!roomId.value) {
+      roomId.value = loadPersistentRoomId() || gameState.value.roomId || ''
+    }
     const newPeerId = await peerService.createHost(roomId.value)
 
     // Обновляем ID хоста в состоянии
@@ -2772,10 +2956,22 @@ export const useGameStore = defineStore('game', () => {
     }
 
     // Устанавливаем роль хоста и запускаем heartbeat
-    peerService.setAsHost(newPeerId)
+    peerService.setRoomContext(roomId.value || gameState.value.roomId || null as any)
+    peerService.setAsHost(newPeerId, roomId.value || gameState.value.roomId)
+    // Устанавливаем роль хоста и запускаем heartbeat
+    peerService.setRoomContext(roomId.value || gameState.value.roomId || null as any)
+    peerService.setAsHost(newPeerId, roomId.value || gameState.value.roomId)
+    // Устанавливаем роль хоста и запускаем heartbeat
+    peerService.setRoomContext(roomId.value || gameState.value.roomId || null as any)
+    peerService.setAsHost(newPeerId, roomId.value || gameState.value.roomId)
+    // Устанавливаем роль хоста и запускаем heartbeat
+    peerService.setRoomContext(roomId.value || gameState.value.roomId || null as any)
+    peerService.setAsHost(newPeerId, roomId.value || gameState.value.roomId)
 
     // Настраиваем обработчики
     setupHostMessageHandlers()
+    // Немедленно шлем консистентный снапшот, чтобы клиенты выровнялись после рестарта хоста
+    broadcastGameState()
 
     console.log('Host restored with ID (may be same as before):', newPeerId)
   }
@@ -2785,6 +2981,11 @@ export const useGameStore = defineStore('game', () => {
     console.log('Restoring as client, connecting to:', targetHostId)
 
     try {
+      // Если фаза не лобби — устанавливаем gameStarted для предотвращения UI отката в лобби до синхронизации
+      if ((gameState.value.phase ?? 'lobby') !== 'lobby') {
+        gameState.value.gameStarted = true
+      }
+
       // ИСПРАВЛЕНО: НЕ очищаем litUpPlayerId сразу, дождемся актуального состояния
       console.log('Keeping current litUpPlayerId until state sync:', gameState.value.litUpPlayerId)
 
@@ -2866,27 +3067,40 @@ export const useGameStore = defineStore('game', () => {
   const waitForGameStateUpdate = (): Promise<void> => {
     return new Promise((resolve) => {
       let attempts = 0
-      const maxAttempts = 10
+      const maxAttempts = 20
+
+      const snapshotPhase = gameState.value.phase
 
       const checkForUpdate = () => {
         attempts++
 
         // Проверяем, что у нас есть актуальные данные игроков
-    const hasValidPlayers = gameState.value.players.length > 0 &&
-      gameState.value.players.some((p: Player) => p.nickname && p.nickname !== '')
+        const hasValidPlayers = gameState.value.players.length > 0 &&
+          gameState.value.players.some((p: Player) => p.nickname && p.nickname !== '')
 
         // Проверяем корректность litUpPlayerId - если указан, то игрок должен существовать
         const litUpPlayerValid = !gameState.value.litUpPlayerId ||
           gameState.value.players.some((p: Player) => p.id === gameState.value.litUpPlayerId)
 
-        if ((hasValidPlayers && litUpPlayerValid) || attempts >= maxAttempts) {
+        // Если в снапшоте была не 'lobby' — ждём прихода валидной (не 'lobby') фазы
+        const phaseConsistent = snapshotPhase && snapshotPhase !== 'lobby'
+          ? (gameState.value.phase && gameState.value.phase !== 'lobby')
+          : true
+
+        if ((hasValidPlayers && litUpPlayerValid && phaseConsistent) || attempts >= maxAttempts) {
           // Очищаем некорректный litUpPlayerId если игрок не найден
           if (gameState.value.litUpPlayerId && !litUpPlayerValid) {
             console.log('Clearing invalid litUpPlayerId:', gameState.value.litUpPlayerId)
             gameState.value.litUpPlayerId = null
           }
 
+          // Если пришла валидная фаза — синхронизируем флаг gameStarted
+          if ((gameState.value.phase ?? 'lobby') !== 'lobby') {
+            gameState.value.gameStarted = true
+          }
+
           console.log('Game state synchronized, players:', gameState.value.players.length,
+            'phase:', gameState.value.phase,
             'litUpPlayerId:', gameState.value.litUpPlayerId)
           resolve()
         } else {
@@ -2912,6 +3126,7 @@ export const useGameStore = defineStore('game', () => {
     if (roomId.value && isHost.value) {
       console.log('🗑️ Clearing saved host peer ID for room:', roomId.value)
       peerService.clearSavedHostId(roomId.value)
+      // Не трогаем ROOM_ID_STORAGE_KEY здесь, чтобы при случайной перезагрузке вкладки хоста roomId сохранялся
     }
 
     peerService.disconnect()
@@ -2953,6 +3168,12 @@ export const useGameStore = defineStore('game', () => {
   // Установка никнейма по умолчанию при инициализации
   if (!myNickname.value) {
     myNickname.value = generateDefaultNickname()
+  }
+
+  // При инициализации, если мы будем создавать комнату — переиспользуем стабильный roomId
+  const preloadedRoomId = loadPersistentRoomId()
+  if (preloadedRoomId && !roomId.value) {
+    roomId.value = preloadedRoomId
   }
 
   // Автоматическое сохранение сессии при изменениях

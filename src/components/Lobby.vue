@@ -10,6 +10,11 @@
 
       <!-- Хост секция -->
       <div v-if="gameStore.isHost" class="host-section">
+        <div v-if="gameStore.connectionStatus !== 'connected'" class="reconnect-banner">
+          <span class="dot"></span>
+          Восстанавливаем подключение… сохраняем состояние игры.
+        </div>
+        <div v-else>
         <div class="room-info">
           <div class="room-id-section">
             <h3>ID комнаты для подключения:</h3>
@@ -42,7 +47,7 @@
           </div>
         </div>
 
-        <div class="start-section">
+        <div class="start-section" v-if="gameStore.connectionStatus === 'connected'">
           <button
             class="btn btn-primary btn-large"
             @click="startGame"
@@ -51,17 +56,27 @@
             {{ gameStore.canStartGame ? 'Начать игру' : `Ожидание игроков (${gameStore.gameState.players.length}/2)` }}
           </button>
         </div>
+        </div>
       </div>
 
       <!-- Клиент секция -->
       <div v-else class="client-section">
-        <div class="waiting-message">
+        <div v-if="gameStore.connectionStatus !== 'connected'" class="reconnect-banner">
+          <span class="dot"></span>
+          Переподключение к хосту… сохраняем состояние игры.
+        </div>
+        <div v-else class="waiting-message">
           <h3>Ожидание начала игры...</h3>
           <p>Хост начнет игру, когда будет готов</p>
         </div>
       </div>
 
       <!-- Список игроков -->
+      <div v-if="gameStore.connectionStatus === 'connecting'" class="reconnect-banner">
+        <span class="dot"></span>
+        Восстанавливаем подключение к хосту…
+      </div>
+
       <div class="players-section">
         <h3>Игроки в комнате ({{ gameStore.gameState.players.length }}/{{ gameStore.gameState.maxPlayers }}):</h3>
         <div class="players-list">
@@ -190,9 +205,21 @@ watch(() => gameStore.gameState.gameStarted, (started) => {
 })
 
 onMounted(() => {
+  // Если идет восстановление/переподключение — пока показываем текущий экран
+  if (gameStore.connectionStatus === 'connecting') {
+    return
+  }
+
   // Проверяем, что мы в комнате
   if (!gameStore.myPlayerId) {
     router.push('/')
+    return
+  }
+
+  // Если игра уже не в lobby — сразу переходим в игру
+  const phase = gameStore.gameState.phase ?? (gameStore.gameState.gameStarted ? 'drawing_question' : 'lobby')
+  if (phase !== 'lobby' || gameStore.gameState.gameStarted) {
+    router.push('/game')
     return
   }
 
@@ -362,6 +389,25 @@ onMounted(() => {
 
 .start-section {
   text-align: center;
+}
+.reconnect-banner {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #fff3cd;
+  color: #7a5d00;
+  border: 1px solid #ffe08a;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.reconnect-banner .dot {
+  width: 8px;
+  height: 8px;
+  background: #f59e0b;
+  border-radius: 50%;
+  box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.15);
 }
 
 .client-section {
