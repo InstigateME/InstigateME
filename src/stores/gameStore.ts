@@ -18,6 +18,8 @@ import type {
   ExtendedSessionData,
   HostRecoveryAnnouncementPayload
 } from '@/types/game'
+import { makeMessage } from '@/types/game'
+import type { MessageMeta } from '@/types/game'
 import {peerService} from '@/services/peerService'
 import {
   MIGRATION_TIMEOUT,
@@ -43,146 +45,334 @@ export const useGameStore = defineStore('game', () => {
   // Структура очков: { [playerId]: number }
 
   // Режим игры: 'basic' — обычный, 'advanced' — 2.0 (с письменными ответами)
-  const gameMode = ref<'basic' | 'advanced'>('basic');
+  const gameMode = ref<'basic' | 'advanced'>('basic')
+  const gamePhase = ref<'lobby' | 'drawing_question' | 'voting' | 'secret_voting' | 'betting' | 'results' | 'answering' | 'guessing' | 'advanced_results' | 'game_over'>('lobby')
+
+  // Чередование: 16 раундов, нечетные — basic, четные — advanced
+  const TOTAL_ROUNDS = 16
+  const currentRound = ref<number>(1)
+  const currentMode = computed<'basic' | 'advanced'>(() => (currentRound.value % 2 === 1 ? 'basic' : 'advanced'))
+  const roundsLeft = computed<number>(() => Math.max(0, TOTAL_ROUNDS - currentRound.value + 1))
 
   const initializeGame = (mode: 'basic' | 'advanced' = 'basic') => {
+    gamePhase.value = 'lobby';
     gameMode.value = mode;
-    gameState.value.questionCards = Array.from({length: 20}, (_, i) => `Карточка ${i + 1}`);
+
+    // Явно фиксируем режим/фазу и новые поля и в GameState
+    gameState.value.gameMode = mode;
+    gameState.value.phase = 'lobby';
+
+    gameState.value.questionCards = Array.from({ length: 20 }, (_, i) => `Вопрос-провокация #${i + 1}`)
+
+    // Инициализация карт и очков
+    gameState.value.scores = {}
     gameState.value.players.forEach((player) => {
-      player.votingCards = ['Карточка 1', 'Карточка 2'];
-      player.bettingCards = ['0', '+-', '+'];
-    });
-    gameState.value.scores = {};
-    gameState.value.players.forEach((player) => {
-      gameState.value.scores[player.id] = 0;
-    });
-    gameState.value.currentTurn = 0;
-    gameState.value.currentQuestion = null;
-    gameState.value.votes = {};
-    gameState.value.bets = {};
+      player.votingCards = ['Голос 1', 'Голос 2']
+      player.bettingCards = ['0', '+-', '+']
+      gameState.value.scores[player.id] = 0
+    })
+
+    // Стартовый ход
+    gameState.value.currentTurn = 0
+    gameState.value.currentTurnPlayerId = gameState.value.players[0]?.id || null
+
+    // Сброс полей раунда
+    gameState.value.currentQuestion = null
+    gameState.value.votes = {}
+    gameState.value.voteCounts = {}
+    gameState.value.bets = {}
+    gameState.value.roundScores = {}
+
     // Для режима 2.0
     if (mode === 'advanced') {
-      gameState.value.answers = {};
-      gameState.value.guesses = {};
+      gameState.value.answers = {}
+      gameState.value.guesses = {}
+      gameState.value.answeringPlayerId = null
+      gameState.value.advancedAnswer = null
     }
+
+    // Переводим в фазу вытягивания вопроса
+    gamePhase.value = 'drawing_question'
+    gameState.value.phase = 'drawing_question'
   };
 
   // Обработка голосов и ставок после раунда
+  // Подсчёт очков базового режима
   const processRound = () => {
     // Безопасно получаем значения
-    const votesObj = gameState.value.votes ?? {};
-    const betsObj = gameState.value.bets ?? {};
+    const votesObj = gameState.value.votes ?? {}
+    const betsObj = gameState.value.bets ?? {}
 
     // Подсчёт голосов за каждого игрока
-    const voteCounts: Record<string, number> = {};
+    const voteCounts: Record<string, number> = {}
     Object.values(votesObj).forEach((voteArr: string[]) => {
       voteArr.forEach(targetId => {
-        if (!voteCounts[targetId]) voteCounts[targetId] = 0;
-        voteCounts[targetId]++;
-      });
-    });
+        if (!voteCounts[targetId]) voteCounts[targetId] = 0
+        voteCounts[targetId]++
+      })
+    })
+    gameState.value.voteCounts = voteCounts
 
     // Определяем максимум голосов
-    const maxVotes = Math.max(0, ...Object.values(voteCounts));
-    // Находим лидеров
+    const maxVotes = Math.max(0, ...Object.values(voteCounts))
     const leaders = Object.entries(voteCounts)
       .filter(([_, count]) => count === maxVotes && maxVotes > 0)
-      .map(([playerId]) => playerId);
+      .map(([playerId]) => playerId)
 
     // Начисляем очки по правилам
+    const roundScores: Record<string, number> = {}
     gameState.value.players.forEach(player => {
-      const pid = player.id;
-      const bet = betsObj[pid];
-      const votes = voteCounts[pid] || 0;
+      const pid = player.id
+      const bet = betsObj[pid]
+      const votes = voteCounts[pid] || 0
+      let add = 0
 
       if (leaders.includes(pid) && bet === '+') {
-        // Лидер и правильно предсказал
-        gameState.value.scores[pid] += votes;
+        add = votes
       } else if (votes === 0 && bet === '0') {
-        // Никто не проголосовал и ставка "0"
-        gameState.value.scores[pid] += 1;
+        add = 1
       } else if (bet === '+-' && votes > 0 && !leaders.includes(pid)) {
-        // Получил голоса, но не лидер, и ставка "+-"
-        gameState.value.scores[pid] += 1;
+        add = 1
       }
-      // В остальных случаях очки не начисляются
-    });
+      gameState.value.scores[pid] = (gameState.value.scores[pid] || 0) + add
+      roundScores[pid] = add
+    })
+    gameState.value.roundScores = roundScores
 
-    // Сброс голосов и ставок
-    gameState.value.votes = {};
-    gameState.value.bets = {};
+    // ВАЖНО: НЕ сбрасываем голоса и ставки здесь.
+    // Они нужны для отображения в фазе 'results'.
+    // Очистка произойдет в finishRound при переходе к следующему раунду.
   };
 
   // mode: 'basic' | 'advanced'
   const startGame = (mode: 'basic' | 'advanced' = 'basic') => {
-    if (!canStartGame.value) return;
-    initializeGame(mode);
-    gameState.value.gameStarted = true;
-    broadcastGameState();
-  };
+    if (!isHost.value) return
+    // Разрешаем старт при >=3 игроках ИЛИ мы находимся в явной фазе лобби
+    const enoughPlayers = gameState.value.players.length >= 3
+    const isLobby = (gameState.value.phase ?? 'lobby') === 'lobby'
+    if (!enoughPlayers && !isLobby) return
 
-  const drawCard = () => {
-    if (gameState.value.questionCards.length === 0) return null;
-    const card = gameState.value.questionCards.shift() || null;
-    gameState.value.currentQuestion = card;
-    return card;
-  };
+    // Инициализируем игру и явно дублируем всё в gameState для клиентов
+    initializeGame(mode)
+    gameState.value.gameStarted = true
+    gameState.value.gameMode = mode
+    gameState.value.phase = 'drawing_question'
+
+    // Немедленно шлем актуальное состояние всем клиентам
+    broadcastGameState()
+  }
+
+  // ВАЖНО: drawCard вызывается на стороне хоста (локально у хоста), но инициироваться может клиентом через draw_question_request.
+  // Не полагаемся на myPlayerId на хосте, а проверяем requesterId, который передаём из обработчика сообщения.
+  const drawCard = (requesterId?: string | null) => {
+    // Действие разрешено только в фазе вытягивания вопроса
+    if (gamePhase.value !== 'drawing_question') return null
+
+    const currentTurnPid = gameState.value.currentTurnPlayerId
+    if (!currentTurnPid) return null
+
+    // Если вызвано локально у хоста (например, сам хост в свой ход), разрешаем.
+    // Если вызвано по сети (requesterId передан), проверяем, что именно текущий игрок запросил действие.
+    if (requesterId && requesterId !== currentTurnPid) return null
+
+    if (gameState.value.questionCards.length === 0) return null
+
+    // Вытягиваем карту
+    const card = gameState.value.questionCards.shift() || null
+    gameState.value.currentQuestion = card
+
+    // Сначала рассылаем состояние с установленным вопросом в фазе drawing_question
+    gameState.value.phase = 'drawing_question'
+    gamePhase.value = 'drawing_question'
+    broadcastGameState()
+
+    // После того как вопрос установлен и разослан в фазе drawing_question,
+    // сразу переходим к голосованию, чтобы шаблон показывал одновременно карточку и голосование.
+    // Карточка вопроса будет отображаться в секции голосования (см. GameField.vue).
+    const nextPhase = gameMode.value === 'basic' ? 'voting' : 'secret_voting'
+    gamePhase.value = nextPhase
+    gameState.value.phase = nextPhase
+    broadcastGameState()
+
+    return card
+  }
 
   // Игрок делает голос: votesArr — массив из двух id выбранных игроков
   const submitVote = (voterId: string, votesArr: string[]) => {
-    gameState.value.votes![voterId] = votesArr;
-  };
+    if (gamePhase.value !== 'voting' && gamePhase.value !== 'secret_voting') return
+    if (!gameState.value.votes) gameState.value.votes = {}
+    gameState.value.votes[voterId] = votesArr
+    broadcastGameState()
+  }
 
   // Игрок делает ставку: bet — '0' | '+-' | '+'
-  const submitBet = (playerId: string, bet: string) => {
-    gameState.value.bets![playerId] = bet;
-  };
+  const submitBet = (playerId: string, bet: '0' | '+-' | '+') => {
+    if (gamePhase.value !== 'betting') return
+    if (!gameState.value.bets) gameState.value.bets = {}
 
-  // Завершить раунд: подсчёт очков, сброс, переход хода
-  const finishRound = () => {
-    if (gameMode.value === 'basic') {
-      processRound();
-      gameState.value.currentTurn = (gameState.value.currentTurn + 1) % gameState.value.players.length;
-      gameState.value.currentQuestion = null;
-      gameState.value.players.forEach((player) => {
-        player.votingCards = ['Карточка 1', 'Карточка 2'];
-        player.bettingCards = ['0', '+-', '+'];
-      });
-    } else if (gameMode.value === 'advanced') {
-      // Подсчёт очков для режима 2.0
-      // Игрок с большинством голосов отвечает, остальные угадывают
-      const votesObj = gameState.value.votes ?? {};
-      // Подсчёт голосов
-      const voteCounts: Record<string, number> = {};
-      Object.values(votesObj).forEach((voteArr: string[]) => {
-        voteArr.forEach(targetId => {
-          if (!voteCounts[targetId]) voteCounts[targetId] = 0;
-          voteCounts[targetId]++;
-        });
-      });
-      // Находим игрока с макс. голосов
-      const maxVotes = Math.max(0, ...Object.values(voteCounts));
-      const leaders = Object.entries(voteCounts)
-        .filter(([_, count]) => count === maxVotes && maxVotes > 0)
-        .map(([playerId]) => playerId);
-      const answeringPlayerId = leaders[0] || null;
-      // Проверяем ответы
-      if (answeringPlayerId && gameState.value.answers && gameState.value.guesses) {
-        const answer = gameState.value.answers[answeringPlayerId];
-        Object.entries(gameState.value.guesses).forEach(([playerId, guess]) => {
-          if (playerId !== answeringPlayerId && guess && answer && guess.trim().toLowerCase() === answer.trim().toLowerCase()) {
-            gameState.value.scores[playerId] = (gameState.value.scores[playerId] || 0) + 1;
-          }
-        });
-      }
-      // Сброс
-      gameState.value.currentTurn = (gameState.value.currentTurn + 1) % gameState.value.players.length;
-      gameState.value.currentQuestion = null;
-      gameState.value.votes = {};
-      gameState.value.answers = {};
-      gameState.value.guesses = {};
+    // Не даем менять ставку после первой фиксации (alreadyBet на клиенте), но защищаем и на хосте
+    if (gameState.value.bets[playerId]) return
+
+    // Фиксируем ставку и сразу шлем обновление, чтобы UI в фазе results корректно показывал выбранное значение
+    gameState.value.bets[playerId] = bet
+    broadcastGameState()
+
+    // Если все активные игроки сделали ставку — сразу считаем и показываем результаты
+    const playersCount = gameState.value.players.length
+    const betsCount = Object.keys(gameState.value.bets).length
+
+    if (betsCount >= playersCount) {
+      processRound()
+      gamePhase.value = 'results'
+      gameState.value.phase = 'results'
+      broadcastGameState()
     }
-    broadcastGameState();
+  }
+
+  // Завершить фазу/раунд локально на стороне хоста (используется из сетевого обработчика)
+  const finishRoundHostOnly = () => {
+    // Защита от преждевременного перехода из betting в results до получения всех ставок
+    if (gameMode.value === 'basic' && gamePhase.value === 'betting') {
+      const playersCount = gameState.value.players.length
+      const betsCount = Object.keys(gameState.value.bets || {}).length
+      if (betsCount < playersCount) {
+        console.log('Finish round ignored: not all bets received', { betsCount, playersCount })
+        return
+      }
+    }
+
+    // Управление фазами и очками
+    if (gameMode.value === 'basic') {
+      // Если только что завершилось голосование — переходим к ставкам
+      if (gamePhase.value === 'voting') {
+        gamePhase.value = 'betting';
+        gameState.value.phase = 'betting';
+        broadcastGameState()
+        return
+      }
+
+      // Если завершены ставки — считаем очки и показываем результаты
+      if (gamePhase.value === 'betting') {
+        processRound()
+        gamePhase.value = 'results'
+        gameState.value.phase = 'results'
+        broadcastGameState()
+        return
+      }
+
+      // Если показаны результаты — готовим следующий раунд
+      if (gamePhase.value === 'results') {
+        // Переход хода
+        const nextTurn = ((gameState.value.currentTurn || 0) + 1) % (gameState.value.players.length || 1)
+        gameState.value.currentTurn = nextTurn
+        gameState.value.currentTurnPlayerId = gameState.value.players[nextTurn]?.id || null
+
+        // Сброс раундовых данных
+        gameState.value.currentQuestion = null
+        gameState.value.votes = {}
+        gameState.value.voteCounts = {}
+        gameState.value.bets = {}
+        gameState.value.roundScores = {}
+
+        // Проверка на конец игры
+        if (gameState.value.questionCards.length === 0) {
+          gamePhase.value = 'game_over'
+          gameState.value.phase = 'game_over'
+        } else {
+          gamePhase.value = 'drawing_question'
+          gameState.value.phase = 'drawing_question'
+        }
+
+        // Обновляем карты на руках (если нужно)
+        gameState.value.players.forEach((player) => {
+          player.votingCards = ['Голос 1', 'Голос 2']
+          player.bettingCards = ['0', '+-', '+']
+        })
+
+        broadcastGameState()
+        return
+      }
+    } else {
+      // advanced режим
+      if (gamePhase.value === 'secret_voting') {
+        // Определяем отвечающего по голосам
+        const votesObj = gameState.value.votes ?? {}
+        const voteCounts: Record<string, number> = {}
+        Object.values(votesObj).forEach((voteArr: string[]) => {
+          voteArr.forEach((targetId) => {
+            voteCounts[targetId] = (voteCounts[targetId] || 0) + 1
+          })
+        })
+        gameState.value.voteCounts = voteCounts
+
+        const maxVotes = Math.max(0, ...Object.values(voteCounts))
+        const leaders = Object.entries(voteCounts)
+          .filter(([_, count]) => count === maxVotes && maxVotes > 0)
+          .map(([playerId]) => playerId)
+
+        gameState.value.answeringPlayerId = leaders[0] || null
+        gamePhase.value = 'answering'
+        gameState.value.phase = 'answering'
+        broadcastGameState()
+        return
+      }
+
+      if (gamePhase.value === 'answering') {
+        // Получили ответ — переходим к угадыванию
+        gamePhase.value = 'guessing'
+        gameState.value.phase = 'guessing'
+        broadcastGameState()
+        return
+      }
+
+      if (gamePhase.value === 'guessing') {
+        // Подсчет очков за угадывание
+        if (!gameState.value.roundScores) gameState.value.roundScores = {}
+        const correct = (gameState.value.advancedAnswer || '').trim().toLowerCase()
+        Object.entries(gameState.value.guesses || {}).forEach(([pid, guess]) => {
+          if (pid !== gameState.value.answeringPlayerId) {
+            const ok = (guess || '').trim().toLowerCase() === correct && correct.length > 0
+            if (ok) {
+              gameState.value.roundScores![pid] = (gameState.value.roundScores![pid] || 0) + 1
+              gameState.value.scores[pid] = (gameState.value.scores[pid] || 0) + 1
+            } else {
+              gameState.value.roundScores![pid] = gameState.value.roundScores![pid] || 0
+            }
+          }
+        })
+
+        gamePhase.value = 'advanced_results'
+        gameState.value.phase = 'advanced_results'
+        broadcastGameState()
+        return
+      }
+
+      if (gamePhase.value === 'advanced_results') {
+        // Переход хода и сброс
+        const nextTurn = ((gameState.value.currentTurn || 0) + 1) % (gameState.value.players.length || 1)
+        gameState.value.currentTurn = nextTurn
+        gameState.value.currentTurnPlayerId = gameState.value.players[nextTurn]?.id || null
+
+        gameState.value.currentQuestion = null
+        gameState.value.votes = {}
+        gameState.value.voteCounts = {}
+        gameState.value.guesses = {}
+        gameState.value.answers = {}
+        gameState.value.answeringPlayerId = null
+        gameState.value.advancedAnswer = null
+        gameState.value.roundScores = {}
+
+        if (gameState.value.questionCards.length === 0) {
+          gamePhase.value = 'game_over'
+          gameState.value.phase = 'game_over'
+        } else {
+          gamePhase.value = 'drawing_question'
+          gameState.value.phase = 'drawing_question'
+        }
+        broadcastGameState()
+        return
+      }
+    }
   };
   // Состояние игры
   const gameState = ref<GameState & {
@@ -197,7 +387,7 @@ export const useGameStore = defineStore('game', () => {
     maxPlayers: 8,
     hostId: '',
     createdAt: 0,
-    questionCards: Array.from({length: 20}, (_, i) => `Карточка ${i + 1}`),
+    questionCards: Array.from({length: 20}, (_, i) => `Вопрос-провокация #${i + 1}`),
     votingCards: {},
     bettingCards: {},
     currentTurn: 0,
@@ -217,9 +407,15 @@ export const useGameStore = defineStore('game', () => {
   const restorationState = ref<'idle' | 'discovering' | 'restoring'>('idle')
 
   // Computed
-  const canStartGame = computed(() =>
-    isHost.value && gameState.value.players.length >= 2 && !gameState.value.gameStarted
-  )
+  // Кнопка "Начать" должна быть активна для хоста при >=3 игроках и если игра еще не запущена
+  // Также учитываем восстановление состояния: если мы хост и phase === 'lobby', разрешаем старт независимо от gameStarted флага,
+  // так как он может быть не синхронизирован в начальный момент.
+  const canStartGame = computed(() => {
+    const enoughPlayers = gameState.value.players.length >= 3
+    const isLobby = (gameState.value.phase ?? 'lobby') === 'lobby'
+    const notStarted = !gameState.value.gameStarted
+    return isHost.value && enoughPlayers && (notStarted || isLobby)
+  })
 
   const myPlayer = computed(() =>
     gameState.value.players.find(p => p.id === myPlayerId.value)
@@ -303,7 +499,7 @@ export const useGameStore = defineStore('game', () => {
         gameState.value.hostId = restoredPeerId
 
         // Обновляем мой ID в списке игроков
-        const myPlayerIndex = gameState.value.players.findIndex(p => p.isHost)
+        const myPlayerIndex = gameState.value.players.findIndex((p: Player) => p.isHost)
         if (myPlayerIndex !== -1) {
           gameState.value.players[myPlayerIndex].id = restoredPeerId
           gameState.value.players[myPlayerIndex].nickname = nickname
@@ -336,15 +532,25 @@ export const useGameStore = defineStore('game', () => {
         roomId.value = targetRoomId
         hostId.value = restoredPeerId
 
-        gameState.value = {
-          roomId: targetRoomId,
-          gameStarted: false,
-          players: [],
-          litUpPlayerId: null,
-          maxPlayers: 8,
-          hostId: restoredPeerId,
-          createdAt: now
-        }
+    gameState.value = {
+      roomId: targetRoomId,
+      gameStarted: false,
+      players: [],
+      litUpPlayerId: null,
+      maxPlayers: 8,
+      hostId: restoredPeerId,
+      createdAt: now,
+      questionCards: [],
+      votingCards: {},
+      bettingCards: {},
+      currentTurn: 0,
+      scores: {},
+      currentQuestion: null,
+      votes: {},
+      bets: {},
+      answers: {},
+      guesses: {}
+    }
 
         // Добавляем хоста в список игроков
         const hostPlayer: Player = {
@@ -354,7 +560,7 @@ export const useGameStore = defineStore('game', () => {
           isHost: true,
           joinedAt: now,
           authToken: generateAuthToken(restoredPeerId, targetRoomId, now),
-          votingCards: ['Карточка 1', 'Карточка 2'],
+          votingCards: ['Голос 1', 'Голос 2'],
           bettingCards: ['0', '+-', '+']
         }
 
@@ -391,23 +597,31 @@ export const useGameStore = defineStore('game', () => {
       peerService.setAsClient()
 
       // Отправляем запрос на подключение
-      peerService.sendMessage(targetHostId, {
-        type: 'join_request',
-        payload: {
-          nickname,
-          savedPlayerId: myPlayerId.value // КРИТИЧНО: передаем ID для отслеживания переподключений
-        }
-      })
+      peerService.sendMessage(
+        targetHostId,
+        makeMessage(
+          'join_request',
+          {
+            nickname,
+            savedPlayerId: myPlayerId.value // КРИТИЧНО: передаем ID для отслеживания переподключений
+          },
+          { roomId: roomId.value || '', fromId: myPlayerId.value, ts: Date.now() } as MessageMeta
+        )
+      )
 
       // КРИТИЧНО: Сразу запрашиваем список всех игроков для mesh-подключения
-      peerService.sendMessage(targetHostId, {
-        type: 'request_peer_list',
-        payload: {
-          requesterId: myPlayerId.value,
-          requesterToken: '',
-          timestamp: Date.now()
-        }
-      })
+      peerService.sendMessage(
+        targetHostId,
+        makeMessage(
+          'request_peer_list',
+          {
+            requesterId: myPlayerId.value,
+            requesterToken: '',
+            timestamp: Date.now()
+          },
+          { roomId: roomId.value || '', fromId: myPlayerId.value, ts: Date.now() }
+        )
+      )
 
       connectionStatus.value = 'connected'
       setupClientMessageHandlers()
@@ -449,7 +663,7 @@ export const useGameStore = defineStore('game', () => {
         return
       }
 
-      const {nickname} = message.payload
+      const { nickname } = (message as Extract<PeerMessage, { type: 'join_request' }>).payload
 
       // Сначала проверяем, не подключен ли уже этот игрок по ID
       const existingPlayerById = gameState.value.players.find(p => p.id === conn.peer)
@@ -462,11 +676,11 @@ export const useGameStore = defineStore('game', () => {
 
       // Проверяем, есть ли игрок с сохраненным ID (переподключение)
       // Используем savedPlayerId из payload сообщения клиента
-      const {savedPlayerId} = message.payload
+      const { savedPlayerId } = (message as Extract<PeerMessage, { type: 'join_request' }>).payload
       console.log('🔍 HOST: Checking for existing player by savedPlayerId:', {
         savedPlayerId,
         hasPayloadSavedId: !!savedPlayerId,
-        currentPlayers: gameState.value.players.map(p => ({id: p.id, nickname: p.nickname, isHost: p.isHost})),
+        currentPlayers: gameState.value.players.map((p: Player) => ({id: p.id, nickname: p.nickname, isHost: p.isHost})),
         currentLitUpPlayerId: gameState.value.litUpPlayerId
       })
 
@@ -509,14 +723,18 @@ export const useGameStore = defineStore('game', () => {
           broadcastGameState()
 
           // КРИТИЧНО: Отправляем специальное сообщение клиенту о смене его ID
-          peerService.sendMessage(conn.peer, {
-            type: 'player_id_updated',
-            payload: {
-              oldId: savedPlayerId,
-              newId: conn.peer,
-              message: 'Your player ID has been updated due to reconnection'
-            }
-          })
+          peerService.sendMessage(
+            conn.peer,
+            makeMessage(
+              'player_id_updated',
+              {
+                oldId: savedPlayerId,
+                newId: conn.peer,
+                message: 'Your player ID has been updated due to reconnection'
+              },
+              { roomId: gameState.value.roomId, fromId: gameState.value.hostId, ts: Date.now() }
+            )
+          )
 
           console.log('✅ HOST: Updated existing player and sent ID update notification:', existingPlayerBySavedId)
           return
@@ -545,12 +763,13 @@ export const useGameStore = defineStore('game', () => {
 
       // Отправляем обновленное состояние всем игрокам
       broadcastGameState()
-      console.log('Updated players list:', gameState.value.players.map(p => ({id: p.id, nickname: p.nickname})))
+      console.log('Updated players list:', gameState.value.players.map((p: Player) => ({id: p.id, nickname: p.nickname})))
     })
 
     peerService.onMessage('light_up_request', (message) => {
-      console.log('🔥 HOST: Received light_up_request:', message.payload)
-      const {playerId} = message.payload
+      const typed = message as Extract<PeerMessage, { type: 'light_up_request' }>
+      console.log('🔥 HOST: Received light_up_request:', typed.payload)
+      const { playerId } = typed.payload
 
       console.log('🔍 HOST: Processing light_up_request:', {
         requestedPlayerId: playerId,
@@ -596,11 +815,227 @@ export const useGameStore = defineStore('game', () => {
       if (!conn) return
 
       console.log('Host sending game state to client:', conn.peer)
+
+      // Перед отправкой убеждаемся, что phase/gameMode синхронизированы с локальными рефами
+      gameState.value.phase = gamePhase.value
+      gameState.value.gameMode = gameMode.value
+
       // Отправляем актуальное состояние игры запросившему клиенту
-      peerService.sendMessage(conn.peer, {
-        type: 'game_state_update',
-        payload: gameState.value
+      peerService.sendMessage(
+        conn.peer,
+        makeMessage(
+          'game_state_update',
+          gameState.value,
+          { roomId: gameState.value.roomId, fromId: gameState.value.hostId, ts: Date.now() }
+        )
+      )
+    })
+
+    // -------- Игровые сообщения от клиентов к хосту --------
+
+    // Вытягивание вопроса — разрешено только текущему игроку в фазе drawing_question
+    peerService.onMessage('draw_question_request', (message, conn) => {
+      const requesterId = conn?.peer || (message as Extract<PeerMessage, { type: 'draw_question_request' }>).payload?.playerId
+      console.log('HOST: draw_question_request from', requesterId, 'phase:', gamePhase.value, 'currentTurnPlayerId:', gameState.value.currentTurnPlayerId)
+      if (!isHost.value) return
+      if (gamePhase.value !== 'drawing_question') return
+      if (!requesterId) return
+
+      // Передаём requesterId внутрь drawCard для точной проверки
+      const card = drawCard(requesterId)
+      if (!card) {
+        console.log('Ignored draw_question_request: not allowed or no cards left')
+        return
+      }
+      // drawCard уже делает broadcast
+    })
+
+    // Переход к следующей фазе/раунду — доступно ЛЮБОМУ игроку после консенсуса
+    peerService.onMessage('next_round_request', (message, conn) => {
+      if (!isHost.value) return
+      // Разрешаем кнопку только в фазах результатов
+      if (gamePhase.value !== 'results' && gamePhase.value !== 'advanced_results') return
+
+      // Проверка консенсуса: все должны завершить свои действия (голос/ставка/догадка)
+      const totalPlayers = gameState.value.players.length
+
+      if ((gameState.value.gameMode ?? gameMode.value) === 'basic') {
+        const allVoted = Object.keys(gameState.value.votes || {}).length >= totalPlayers
+        const allBet = Object.keys(gameState.value.bets || {}).length >= totalPlayers
+        const resultsReady = gamePhase.value === 'results' // уже посчитаны очки
+        if (!(allVoted && allBet && resultsReady)) return
+      } else {
+        // advanced
+        const votedCount = Object.keys(gameState.value.votes || {}).length
+        const guessesCount = Object.keys(gameState.value.guesses || {}).filter(pid => pid !== gameState.value.answeringPlayerId).length
+        const requiredGuesses = Math.max(0, totalPlayers - 1)
+        const resultsReady = gamePhase.value === 'advanced_results'
+        if (!(votedCount >= totalPlayers && guessesCount >= requiredGuesses && resultsReady)) return
+      }
+
+      // Выполняем переход хода/сброс раундовых данных
+      finishRoundHostOnly()
+    })
+
+    // Секретные/обычные голоса
+    peerService.onMessage('submit_vote', (message, conn) => {
+      if (!isHost.value) return
+      // Поддерживаем оба формата: targetIds (новый) и votes (старый)
+      const m = message as Extract<PeerMessage, { type: 'submit_vote' }>
+      const voterId = (m.payload as any)?.voterId
+      const rawVotes = (m.payload as any)?.targetIds ?? (m.payload as any)?.votes
+      if (!voterId || !Array.isArray(rawVotes)) return
+      if (gamePhase.value !== 'voting' && gamePhase.value !== 'secret_voting') return
+
+      // Нормализуем массив голосов (макс 2, уникальные и не голосуем за себя)
+      const uniqueVotes = Array.from(new Set(rawVotes)).slice(0, 2)
+      const validVotes = uniqueVotes.filter(id => id && id !== voterId)
+
+      if (!gameState.value.votes) gameState.value.votes = {}
+      gameState.value.votes[voterId] = validVotes
+
+      // Инициализируем bets для следующей фазы, чтобы UI мог показывать дефолт («-») и обновлять по мере поступления ставок
+      if (!gameState.value.bets) gameState.value.bets = {}
+
+      // Обновляем агрегированные голоса для UI в реальном времени
+      const voteCounts: Record<string, number> = {}
+      Object.values(gameState.value.votes).forEach((voteArr: string[]) => {
+        voteArr.forEach((targetId) => {
+          voteCounts[targetId] = (voteCounts[targetId] || 0) + 1
+        })
       })
+      gameState.value.voteCounts = voteCounts
+
+      // Обновляем состояние для всех клиентов, чтобы они увидели прогресс голосования
+      broadcastGameState()
+
+      // Определяем, все ли проголосовали (считаем только реально присутствующих игроков)
+      const playersCount = gameState.value.players.length
+      const votesCount = Object.keys(gameState.value.votes).length
+
+      if (votesCount >= playersCount) {
+        if (gameMode.value === 'basic') {
+          // Переход к ставкам
+          gamePhase.value = 'betting'
+          gameState.value.phase = 'betting'
+
+          // Гарантируем, что в bets есть ключи для всех игроков (значение undefined не сохраняем, UI использует bets[p.id] || '-')
+          gameState.value.players.forEach(p => {
+            if (gameState.value.bets![p.id] === undefined) {
+              // ничего не присваиваем, просто убеждаемся, что объект существует
+            }
+          })
+
+          broadcastGameState()
+        } else {
+          // advanced: уже есть voteCounts — выбираем отвечающего и переходим к answering
+          const maxVotes = Math.max(0, ...Object.values(voteCounts))
+          const leaders = Object.entries(voteCounts)
+            .filter(([_, c]) => c === maxVotes && maxVotes > 0)
+            .map(([pid]) => pid)
+          gameState.value.answeringPlayerId = leaders[0] || null
+
+          gamePhase.value = 'answering'
+          gameState.value.phase = 'answering'
+          broadcastGameState()
+        }
+      }
+    })
+
+    // Ставки в basic
+    peerService.onMessage('submit_bet', (message) => {
+      if (!isHost.value) return
+      if (gameMode.value !== 'basic') return
+      if (gamePhase.value !== 'betting') return
+
+      const payload = (message as Extract<PeerMessage, { type: 'submit_bet' }>).payload
+      const playerId = (payload as any).playerId as string | undefined
+      const bet = (payload as any).bet as ('0' | '+-' | '+') | undefined
+
+      if (!playerId || !bet) return
+
+      // Дедупликация: не позволяем менять ставку после первого принятия
+      if (!gameState.value.bets) gameState.value.bets = {}
+      if (gameState.value.bets[playerId]) {
+        // Игрок уже сделал ставку — повторный submit игнорируем
+        return
+      }
+
+      gameState.value.bets[playerId] = bet
+
+      const playersCount = gameState.value.players.length
+      const betsCount = Object.keys(gameState.value.bets).length
+
+      if (betsCount >= playersCount) {
+        // Все поставили — считаем раунд и в results
+        processRound()
+        gamePhase.value = 'results'
+        gameState.value.phase = 'results'
+      }
+
+      // Важно: сразу рассылаем обновленное состояние, чтобы у клиента отобразилась выбранная ставка
+      broadcastGameState()
+    })
+
+    // Ответ отвечающего (advanced)
+    peerService.onMessage('submit_answer', (message) => {
+      if (!isHost.value) return
+      if (gameMode.value !== 'advanced') return
+      if (gamePhase.value !== 'answering') return
+      const payload = (message as Extract<PeerMessage, { type: 'submit_answer' }>).payload
+      // Валидация и доступ к полям строго по типу SubmitAnswerPayload
+      const playerId = (payload as any).playerId as string | undefined
+      const answer = (payload as any).answer as string | undefined
+      if (!playerId || typeof answer !== 'string') return
+
+      // Только выбранный отвечающий может отправить ответ
+      if (playerId !== gameState.value.answeringPlayerId) return
+
+      gameState.value.advancedAnswer = answer
+      gamePhase.value = 'guessing'
+      gameState.value.phase = 'guessing'
+      broadcastGameState()
+    })
+
+    // Догадки (advanced)
+    peerService.onMessage('submit_guess', (message) => {
+      if (!isHost.value) return
+      if (gameMode.value !== 'advanced') return
+      if (gamePhase.value !== 'guessing') return
+      const payload = (message as Extract<PeerMessage, { type: 'submit_guess' }>).payload
+      const playerId = (payload as any).playerId as string | undefined
+      const guess = (payload as any).guess as string | undefined
+      if (!playerId || typeof guess !== 'string') return
+
+      if (!gameState.value.guesses) gameState.value.guesses = {}
+      gameState.value.guesses[playerId] = guess
+
+      const playersCount = gameState.value.players.length
+      const requiredGuesses = Math.max(0, playersCount - 1) // все кроме отвечающего
+      const guessesCount = Object.keys(gameState.value.guesses).filter(pid => pid !== gameState.value.answeringPlayerId).length
+
+      // Когда получили все догадки, начисляем очки и переходим к advanced_results
+      if (guessesCount >= requiredGuesses) {
+        if (!gameState.value.roundScores) gameState.value.roundScores = {}
+        const correct = (gameState.value.advancedAnswer || '').trim().toLowerCase()
+
+        Object.entries(gameState.value.guesses).forEach(([pid, guess]) => {
+          if (pid !== gameState.value.answeringPlayerId) {
+            const ok = (guess || '').trim().toLowerCase() === correct && correct.length > 0
+            if (ok) {
+              gameState.value.roundScores![pid] = (gameState.value.roundScores![pid] || 0) + 1
+              gameState.value.scores[pid] = (gameState.value.scores[pid] || 0) + 1
+            } else {
+              gameState.value.roundScores![pid] = gameState.value.roundScores![pid] || 0
+            }
+          }
+        })
+
+        gamePhase.value = 'advanced_results'
+        gameState.value.phase = 'advanced_results'
+      }
+
+      broadcastGameState()
     })
 
     // Добавляем обработчики host discovery
@@ -619,18 +1054,21 @@ export const useGameStore = defineStore('game', () => {
     console.log('Cleared old message handlers before setting up client handlers')
 
     peerService.onMessage('game_state_update', (message) => {
-      const newState = {...message.payload}
+      // Защита: принимаем только если мы клиент (у хоста истина в локальном состоянии)
+      if (isHost.value) return
+
+      const newState = { ...(message as Extract<PeerMessage, { type: 'game_state_update' }>).payload }
 
       // КРИТИЧНО: Валидируем litUpPlayerId при получении обновления состояния
       if (newState.litUpPlayerId) {
         console.log('🔍 VALIDATING litUpPlayerId:', {
           litUpPlayerId: newState.litUpPlayerId,
-          playersInState: newState.players.map(p => ({id: p.id, nickname: p.nickname})),
+          playersInState: newState.players.map((p: Player) => ({id: p.id, nickname: p.nickname})),
           myPlayerId: myPlayerId.value,
           totalPlayers: newState.players.length
         })
 
-        const litUpPlayerExists = newState.players.some((p: Player) => p.id === newState.litUpPlayerId)
+        const litUpPlayerExists = newState.players.some((p: Player) => p.id === newState.litUpPlayerId);
         if (!litUpPlayerExists) {
           console.log('🧹 Received invalid litUpPlayerId, clearing it:', {
             invalidId: newState.litUpPlayerId,
@@ -647,7 +1085,7 @@ export const useGameStore = defineStore('game', () => {
     })
 
     peerService.onMessage('player_id_updated', (message) => {
-      const {oldId, newId, message: updateMessage} = message.payload
+      const { oldId, newId, message: updateMessage } = (message as Extract<PeerMessage, { type: 'player_id_updated' }>).payload
       console.log('🔄 CLIENT: Received player_id_updated message:', {
         oldId,
         newId,
@@ -669,7 +1107,7 @@ export const useGameStore = defineStore('game', () => {
     })
 
     peerService.onMessage('heartbeat', (message) => {
-      const {hostId: heartbeatHostId} = message.payload
+      const { hostId: heartbeatHostId } = (message as Extract<PeerMessage, { type: 'heartbeat' }>).payload
       peerService.handleHeartbeat(heartbeatHostId)
     })
 
@@ -691,10 +1129,20 @@ export const useGameStore = defineStore('game', () => {
   // Рассылка состояния игры всем участникам
   const broadcastGameState = () => {
     if (isHost.value) {
-      peerService.broadcastMessage({
-        type: 'game_state_update',
-        payload: gameState.value
-      })
+      // Дублируем phase/режим в объект состояния для клиентов
+      gameState.value.phase = gamePhase.value
+      gameState.value.gameMode = gameMode.value
+
+      // Всегда шлем свежую копию, чтобы избежать мутаций по ссылке у клиентов
+      const snapshot = { ...gameState.value }
+
+      peerService.broadcastMessage(
+        makeMessage(
+          'game_state_update',
+          snapshot,
+          { roomId: gameState.value.roomId, fromId: gameState.value.hostId, ts: Date.now() }
+        )
+      )
     }
   }
 
@@ -728,10 +1176,14 @@ export const useGameStore = defineStore('game', () => {
     } else {
       console.log('Client sending light_up_request to host:', hostId.value)
       // Клиент отправляет запрос хосту
-      peerService.sendMessage(hostId.value, {
-        type: 'light_up_request',
-        payload: {playerId: myPlayerId.value}
-      })
+      peerService.sendMessage(
+        hostId.value,
+        makeMessage(
+          'light_up_request',
+          { playerId: myPlayerId.value },
+          { roomId: roomId.value || gameState.value.roomId, fromId: myPlayerId.value, ts: Date.now() }
+        )
+      )
     }
   }
 
@@ -793,25 +1245,43 @@ export const useGameStore = defineStore('game', () => {
         setupClientMessageHandlers()
 
         // Отправляем запрос на подключение с сохраненным ID для повторного подключения
-        peerService.sendMessage(hostId, {
-          type: 'join_request',
-          payload: {
+      peerService.sendMessage(
+        hostId,
+        makeMessage(
+          'join_request',
+          {
             nickname: myNickname.value,
             savedPlayerId: myPlayerId.value  // КРИТИЧНО: передаем текущий ID как сохраненный
-          }
-        })
+          },
+          { roomId: roomId.value || gameState.value.roomId, fromId: myPlayerId.value, ts: Date.now() }
+        )
+      )
 
         // Запрашиваем актуальное состояние игры
-        peerService.sendMessage(hostId, {
-          type: 'request_game_state',
-          payload: {requesterId: myPlayerId.value}
-        })
+        peerService.sendMessage(
+          hostId,
+          makeMessage(
+            'request_game_state',
+            { requesterId: myPlayerId.value },
+            { roomId: roomId.value || gameState.value.roomId, fromId: myPlayerId.value, ts: Date.now() }
+          )
+        )
 
         connectionStatus.value = 'connected'
         console.log('✅ Successfully reconnected to host:', hostId)
         return
 
-      } catch (error) {
+      } catch (error: unknown) {
+        if (error instanceof Error) {
+          console.error('Failed to reconnect to host:', error.message);
+        } else {
+          console.error('An unknown error occurred during reconnection.');
+        }
+      if (error instanceof Error) {
+        console.error('Failed to create room:', error.message);
+      } else {
+        console.error('An unknown error occurred during room creation.');
+      }
         console.log(`❌ Reconnection attempt ${attempt} failed:`, error)
 
         if (attempt < maxAttempts) {
@@ -835,7 +1305,7 @@ export const useGameStore = defineStore('game', () => {
       console.log('🔄 Grace period completed, starting migration process...')
       console.log('🔍 MIGRATION START STATE:', {
         originalHostId,
-        currentGameStatePlayers: gameState.value.players.map(p => ({id: p.id, nickname: p.nickname, isHost: p.isHost})),
+        currentGameStatePlayers: gameState.value.players.map((p: Player) => ({id: p.id, nickname: p.nickname, isHost: p.isHost})),
         myPlayerId: myPlayerId.value,
         connectionStatus: connectionStatus.value,
         migrationInProgress: migrationState.value.inProgress,
@@ -844,33 +1314,39 @@ export const useGameStore = defineStore('game', () => {
 
       // Удаляем отключенного хоста из списка игроков
       const playersBeforeFilter = gameState.value.players.length
-      gameState.value.players = gameState.value.players.filter(p => p.id !== originalHostId)
+      gameState.value.players = gameState.value.players.filter((p: Player) => p.id !== originalHostId)
       const playersAfterFilter = gameState.value.players.length
 
       console.log('🔍 PLAYER FILTERING:', {
         originalHostId,
         playersBeforeFilter,
         playersAfterFilter,
-        remainingPlayers: gameState.value.players.map(p => ({id: p.id, nickname: p.nickname, authToken: !!p.authToken}))
+        remainingPlayers: gameState.value.players.map((p: Player) => ({id: p.id, nickname: p.nickname, authToken: !!p.authToken}))
       })
 
       // Проверяем токены оставшихся игроков
-      const validPlayers = gameState.value.players.filter(validateAuthToken)
+      const validPlayers = gameState.value.players.filter((p: Player) => validateAuthToken(p))
       console.log('🔍 TOKEN VALIDATION:', {
         totalPlayers: gameState.value.players.length,
         validPlayers: validPlayers.length,
-        invalidPlayers: gameState.value.players.filter(p => !validateAuthToken(p)).map(p => ({
-          id: p.id,
-          nickname: p.nickname,
-          hasToken: !!p.authToken
-        }))
+        invalidPlayers: gameState.value.players
+          .filter((p: Player) => !validateAuthToken(p))
+          .map((p: Player) => ({
+            id: p.id,
+            nickname: p.nickname,
+            hasToken: !!p.authToken
+          }))
+      } as {
+        totalPlayers: number
+        validPlayers: number
+        invalidPlayers: Array<{ id: string; nickname: string; hasToken: boolean }>
       })
 
       if (validPlayers.length === 0) {
         throw new Error('No valid players remaining after grace period')
       }
 
-      console.log('Valid players remaining after grace period:', validPlayers.map(p => ({
+      console.log('Valid players remaining after grace period:', (validPlayers as Player[]).map((p: Player) => ({
         id: p.id,
         nickname: p.nickname
       })))
@@ -884,7 +1360,7 @@ export const useGameStore = defineStore('game', () => {
         activeConnections: peerService.getActiveConnections()
       })
 
-      const discoveredHost = await quickHostDiscovery(validPlayers)
+      const discoveredHost = await quickHostDiscovery(validPlayers as Player[])
 
       console.log('🔍 DISCOVERY RESULT:', {
         discoveredHost: discoveredHost ? {
@@ -902,11 +1378,11 @@ export const useGameStore = defineStore('game', () => {
 
       // Проверяем активные соединения
       const activeConnections = peerService.getActiveConnections()
-      const openConnections = activeConnections.filter(c => c.isOpen)
+      const openConnections = activeConnections.filter((c: { peerId: string; isOpen: boolean }) => c.isOpen)
       console.log('🔍 CONNECTION ANALYSIS:', {
         totalConnections: activeConnections.length,
         openConnections: openConnections.length,
-        connectionDetails: activeConnections.map(c => ({peerId: c.peerId, isOpen: c.isOpen})),
+        connectionDetails: activeConnections.map((c: { peerId: string; isOpen: boolean }) => ({peerId: c.peerId, isOpen: c.isOpen})),
         knownPeers: peerService.getAllKnownPeers()
       })
 
@@ -919,7 +1395,7 @@ export const useGameStore = defineStore('game', () => {
           selectedHostId: deterministicHost,
           myPlayerId: myPlayerId.value,
           amISelected: deterministicHost === myPlayerId.value,
-          validPlayersForElection: validPlayers.map(p => ({id: p.id, nickname: p.nickname}))
+          validPlayersForElection: validPlayers.map((p: Player) => ({id: p.id, nickname: p.nickname}))
         })
 
         if (deterministicHost === myPlayerId.value) {
@@ -979,10 +1455,14 @@ export const useGameStore = defineStore('game', () => {
       })
       await startSecureMigration(validPlayers)
 
-    } catch (error) {
-      console.error('❌ Failed to proceed with migration after grace period:', error)
+    } catch (error: unknown) {
+      if (error instanceof Error) {
+        console.error('❌ Failed to proceed with migration after grace period:', error.message)
+      } else {
+        console.error('❌ Failed to proceed with migration after grace period: Unknown error')
+      }
       console.log('🔍 MIGRATION ERROR STATE:', {
-        error: error.message,
+        error: (error as any)?.message,
         connectionStatus: connectionStatus.value,
         gameState: {
           playersCount: gameState.value.players.length,
@@ -1143,18 +1623,26 @@ export const useGameStore = defineStore('game', () => {
       setupClientMessageHandlers()
 
       // Запрашиваем актуальное состояние игры
-      peerService.sendMessage(discoveredHost.currentHostId, {
-        type: 'request_game_state',
-        payload: {requesterId: myPlayerId.value}
-      })
+      peerService.sendMessage(
+        discoveredHost.currentHostId,
+        makeMessage(
+          'request_game_state',
+          { requesterId: myPlayerId.value },
+          { roomId: gameState.value.roomId, fromId: myPlayerId.value, ts: Date.now() }
+        )
+      )
 
       connectionStatus.value = 'connected'
       console.log('Successfully reconnected to discovered host')
 
-    } catch (error) {
-      console.error('Failed to reconnect to discovered host:', error)
+    } catch (error: unknown) {
+      if (error instanceof Error) {
+        console.error('Failed to reconnect to discovered host:', error.message)
+      } else {
+        console.error('Failed to reconnect to discovered host: Unknown error')
+      }
       connectionStatus.value = 'disconnected'
-      throw error
+      throw error as any
     }
   }
 
@@ -1180,29 +1668,33 @@ export const useGameStore = defineStore('game', () => {
         await participateInMigration(proposedHost)
       }
 
-    } catch (error) {
-      console.error('Secure migration failed:', error)
+    } catch (error: unknown) {
+      if (error instanceof Error) {
+        console.error('Secure migration failed:', error.message)
+      } else {
+        console.error('Secure migration failed: Unknown error')
+      }
       resetMigrationState()
-      throw error
+      throw error as any
     }
   }
 
   // Выбор нового хоста из валидных игроков
   const electNewHostFromValidPlayers = (validPlayers: Player[]): Player => {
     // Сортируем по nickname для детерминированности (как в electHostDeterministic)
-    const sortedPlayers = validPlayers.sort((a, b) => a.nickname.localeCompare(b.nickname))
+    const sortedPlayers = validPlayers.sort((a: Player, b: Player) => a.nickname.localeCompare(b.nickname))
 
     if (sortedPlayers.length === 0) {
       throw new Error('No valid players for host election')
     }
 
-    console.log('🔍 HOST ELECTION ALGORITHM:', {
-      validPlayers: validPlayers.map(p => ({id: p.id, nickname: p.nickname})),
-      sortedPlayers: sortedPlayers.map(p => ({id: p.id, nickname: p.nickname})),
-      selectedHost: sortedPlayers[0],
-      myPlayerId: myPlayerId.value,
-      amISelected: sortedPlayers[0].id === myPlayerId.value
-    })
+      console.log('🔍 HOST ELECTION ALGORITHM:', {
+        validPlayers: (validPlayers as Player[]).map((p: Player) => ({id: p.id, nickname: p.nickname})),
+        sortedPlayers: (sortedPlayers as Player[]).map((p: Player) => ({id: p.id, nickname: p.nickname})),
+        selectedHost: sortedPlayers[0],
+        myPlayerId: myPlayerId.value,
+        amISelected: sortedPlayers[0].id === myPlayerId.value
+      })
 
     return sortedPlayers[0]
   }
@@ -1228,10 +1720,14 @@ export const useGameStore = defineStore('game', () => {
     for (const player of validPlayers) {
       if (peerService.hasConnection(player.id)) {
         console.log('Sending migration proposal to:', player.id)
-        peerService.sendMessage(player.id, {
-          type: 'migration_proposal',
-          payload: proposal
-        })
+        peerService.sendMessage(
+          player.id,
+          makeMessage(
+            'migration_proposal',
+            proposal,
+            { roomId: gameState.value.roomId, fromId: myPlayerId.value, ts: Date.now() }
+          )
+        )
       } else {
         console.log('No connection to player for migration proposal:', player.id)
       }
@@ -1328,10 +1824,14 @@ export const useGameStore = defineStore('game', () => {
           allConnections: peerService.getActiveConnections()
         })
 
-        peerService.sendMessage(payload.proposedHostId, {
-          type: 'migration_vote',
-          payload: vote
-        })
+        peerService.sendMessage(
+          payload.proposedHostId,
+          makeMessage(
+            'migration_vote',
+            vote,
+            { roomId: gameState.value.roomId, fromId: myPlayerId.value, ts: Date.now() }
+          )
+        )
 
         console.log('✅ Migration vote sent successfully')
       } else {
@@ -1424,10 +1924,13 @@ export const useGameStore = defineStore('game', () => {
     }
 
     // Рассылаем подтверждение
-    peerService.broadcastMessage({
-      type: 'migration_confirmed',
-      payload: confirmation
-    })
+    peerService.broadcastMessage(
+      makeMessage(
+        'migration_confirmed',
+        confirmation,
+        { roomId: gameState.value.roomId, fromId: myPlayerId.value, ts: Date.now() }
+      )
+    )
 
     // Выполняем миграцию
     await executeMigration(migrationState.value.proposedHostId!)
@@ -1458,7 +1961,7 @@ export const useGameStore = defineStore('game', () => {
     gameState.value.hostId = myPlayerId.value
 
     // Обновляем роль игрока в списке
-    const myPlayerIndex = gameState.value.players.findIndex(p => p.id === myPlayerId.value)
+    const myPlayerIndex = gameState.value.players.findIndex((p: Player) => p.id === myPlayerId.value)
     if (myPlayerIndex !== -1) {
       gameState.value.players[myPlayerIndex].isHost = true
     }
@@ -1475,10 +1978,13 @@ export const useGameStore = defineStore('game', () => {
     }
 
     // Отправляем через старые соединения перед их закрытием
-    peerService.broadcastMessage({
-      type: 'new_host_id',
-      payload: newHostMessage
-    })
+    peerService.broadcastMessage(
+      makeMessage(
+        'new_host_id',
+        newHostMessage,
+        { roomId: gameState.value.roomId, fromId: myPlayerId.value, ts: Date.now() }
+      )
+    )
 
     // Обновляем состояние
     myPlayerId.value = newPeerId
@@ -1519,17 +2025,33 @@ export const useGameStore = defineStore('game', () => {
       setupClientMessageHandlers()
 
       // Запрашиваем актуальное состояние игры
-      peerService.sendMessage(newHostId, {
-        type: 'request_game_state',
-        payload: {requesterId: myPlayerId.value}
-      })
+      peerService.sendMessage(
+        newHostId,
+        makeMessage(
+          'request_game_state',
+          { requesterId: myPlayerId.value },
+          { roomId: gameState.value.roomId, fromId: myPlayerId.value, ts: Date.now() }
+        )
+      )
+      peerService.sendMessage(
+        newHostId,
+        makeMessage(
+          'request_game_state',
+          { requesterId: myPlayerId.value },
+          { roomId: gameState.value.roomId, fromId: myPlayerId.value, ts: Date.now() }
+        )
+      )
 
       connectionStatus.value = 'connected'
       console.log('Successfully migrated to new host')
 
       resetMigrationState()
-    } catch (error) {
-      console.error('Failed to finalize migration:', error)
+    } catch (error: unknown) {
+      if (error instanceof Error) {
+        console.error('Failed to finalize migration:', error.message)
+      } else {
+        console.error('Failed to finalize migration: Unknown error')
+      }
       connectionStatus.value = 'disconnected'
       resetMigrationState()
     }
@@ -1599,7 +2121,7 @@ export const useGameStore = defineStore('game', () => {
   // Детерминированный выбор хоста без голосования (fallback)
   const electHostDeterministic = (validPlayers: Player[]): string => {
     // Сортируем игроков по никнейму для консистентности
-    const sortedPlayers = validPlayers.sort((a, b) => a.nickname.localeCompare(b.nickname))
+    const sortedPlayers = validPlayers.sort((a: Player, b: Player) => a.nickname.localeCompare(b.nickname))
 
     if (sortedPlayers.length === 0) {
       throw new Error('No valid players for deterministic host election')
@@ -1616,8 +2138,8 @@ export const useGameStore = defineStore('game', () => {
   const electNewHost = (): string => {
     // Сортируем игроков по ID для детерминированности
     const remainingPlayers = gameState.value.players
-      .filter(p => p.id !== gameState.value.hostId)
-      .sort((a, b) => a.id.localeCompare(b.id))
+      .filter((p: Player) => p.id !== (gameState.value.hostId || ''))
+      .sort((a: Player, b: Player) => a.id.localeCompare(b.id))
 
     if (remainingPlayers.length === 0) {
       throw new Error('No remaining players for host election')
@@ -1640,7 +2162,7 @@ export const useGameStore = defineStore('game', () => {
     gameState.value.hostId = myPlayerId.value
 
     // Обновляем роль игрока в списке
-    const myPlayerIndex = gameState.value.players.findIndex(p => p.id === myPlayerId.value)
+    const myPlayerIndex = gameState.value.players.findIndex((p: Player) => p.id === myPlayerId.value)
     if (myPlayerIndex !== -1) {
       gameState.value.players[myPlayerIndex].isHost = true
     }
@@ -1678,7 +2200,7 @@ export const useGameStore = defineStore('game', () => {
       gameState.value.hostId = myPlayerId.value
 
       // Обновляем роль игрока в списке
-      const myPlayerIndex = gameState.value.players.findIndex(p => p.id === myPlayerId.value)
+      const myPlayerIndex = gameState.value.players.findIndex((p: Player) => p.id === myPlayerId.value)
       if (myPlayerIndex !== -1) {
         gameState.value.players[myPlayerIndex].isHost = true
       }
@@ -1713,10 +2235,13 @@ export const useGameStore = defineStore('game', () => {
 
       // Ждем немного перед отправкой уведомления для стабилизации соединения
       setTimeout(() => {
-        peerService.broadcastToAllPeers({
-          type: 'host_recovery_announcement',
-          payload: recoveryAnnouncement
-        })
+        peerService.broadcastToAllPeers(
+          makeMessage(
+            'host_recovery_announcement',
+            recoveryAnnouncement,
+            { roomId: gameState.value.roomId, fromId: myPlayerId.value, ts: Date.now() }
+          )
+        )
 
         console.log('📢 Sent host recovery announcement to all peers')
       }, MESH_RESTORATION_DELAY)
@@ -1726,10 +2251,14 @@ export const useGameStore = defineStore('game', () => {
 
       connectionStatus.value = 'connected'
 
-    } catch (error) {
-      console.error('❌ Failed to become host with recovery:', error)
+    } catch (error: unknown) {
+      if (error instanceof Error) {
+        console.error('Failed to finalize migration:', error.message)
+      } else {
+        console.error('Failed to finalize migration: Unknown error')
+      }
       connectionStatus.value = 'disconnected'
-      throw error
+      resetMigrationState()
     }
   }
 
@@ -1753,29 +2282,38 @@ export const useGameStore = defineStore('game', () => {
       setupClientMessageHandlers()
 
       // Запрашиваем актуальное состояние игры
-      peerService.sendMessage(newHostId, {
-        type: 'request_game_state',
-        payload: {requesterId: myPlayerId.value}
-      })
+      peerService.sendMessage(
+        newHostId,
+        makeMessage(
+          'request_game_state',
+          { requesterId: myPlayerId.value },
+          { roomId: gameState.value.roomId, fromId: myPlayerId.value, ts: Date.now() }
+        )
+      )
 
       connectionStatus.value = 'connected'
       console.log('Successfully reconnected to new host')
-    } catch (error) {
-      console.error('Failed to reconnect to new host:', error)
+    } catch (error: unknown) {
+      if (error instanceof Error) {
+        console.error('Failed to reconnect to new host:', error.message)
+      } else {
+        console.error('Failed to reconnect to new host: Unknown error')
+      }
       connectionStatus.value = 'disconnected'
-      throw error
+      throw error as any
     }
   }
 
   // Уведомление о смене хоста
   const broadcastHostMigration = (newHostId: string) => {
-    const migrationMessage: PeerMessage = {
-      type: 'host_migration_started',
-      payload: {
+    const migrationMessage = makeMessage(
+      'host_migration_started',
+      {
         newHostId,
         reason: 'host_disconnected'
-      }
-    }
+      },
+      { roomId: gameState.value.roomId, fromId: myPlayerId.value, ts: Date.now() }
+    )
 
     peerService.broadcastMessage(migrationMessage)
   }
@@ -1873,8 +2411,12 @@ export const useGameStore = defineStore('game', () => {
       connectionStatus.value = 'connected'
       console.log('Session successfully restored')
       return true
-    } catch (error) {
-      console.error('Failed to restore session:', error)
+    } catch (error: unknown) {
+      if (error instanceof Error) {
+        console.error('Failed to restore session:', error.message)
+      } else {
+        console.error('Failed to restore session: Unknown error')
+      }
       restorationState.value = 'idle'
       connectionStatus.value = 'disconnected'
       clearSession()
@@ -1897,9 +2439,9 @@ export const useGameStore = defineStore('game', () => {
     }
 
     // Стратегия 2: Опрос всех сохраненных игроков
-    const savedPlayers = sessionData.gameState.players.filter(p => !p.isHost && p.id !== sessionData.myPlayerId)
+    const savedPlayers = sessionData.gameState.players.filter((p: Player) => !p.isHost && p.id !== sessionData.myPlayerId)
     if (savedPlayers.length > 0) {
-      console.log('Strategy 2: Polling saved players:', savedPlayers.map(p => p.id))
+      console.log('Strategy 2: Polling saved players:', savedPlayers.map((p: Player) => p.id))
       const discoveredFromPlayers = await quickHostDiscovery(savedPlayers)
       if (discoveredFromPlayers) {
         return discoveredFromPlayers
@@ -1989,7 +2531,7 @@ export const useGameStore = defineStore('game', () => {
     peerService.onMessage('host_discovery_request', (message, conn) => {
       if (!conn) return
 
-      const request = message.payload as HostDiscoveryRequestPayload
+      const request = (message as Extract<PeerMessage, { type: 'host_discovery_request' }>).payload
       console.log('Received host discovery request:', request)
 
       const response: HostDiscoveryResponsePayload = {
@@ -2001,11 +2543,14 @@ export const useGameStore = defineStore('game', () => {
         timestamp: Date.now()
       }
 
-      // Отправляем ответ
-      conn.send({
-        type: 'host_discovery_response',
-        payload: response
-      })
+      // Отправляем ответ c корректным сообщением протокола
+      conn.send(
+        makeMessage(
+          'host_discovery_response',
+          response,
+          { roomId: gameState.value.roomId, fromId: myPlayerId.value, ts: Date.now() }
+        )
+      )
 
       console.log('Sent host discovery response:', response)
     })
@@ -2019,7 +2564,7 @@ export const useGameStore = defineStore('game', () => {
     peerService.onMessage('request_peer_list', (message, conn) => {
       if (!conn) return
 
-      const request = message.payload as PeerListRequestPayload
+      const request = (message as Extract<PeerMessage, { type: 'request_peer_list' }>).payload
       console.log('Received peer list request:', request)
 
       // Отправляем список всех игроков запросившему
@@ -2029,21 +2574,24 @@ export const useGameStore = defineStore('game', () => {
         timestamp: Date.now()
       }
 
-      conn.send({
-        type: 'peer_list_update',
-        payload: peerListUpdate
-      })
+      conn.send(
+        makeMessage(
+          'peer_list_update',
+          peerListUpdate,
+          { roomId: gameState.value.roomId, fromId: myPlayerId.value, ts: Date.now() }
+        )
+      )
 
       console.log('Sent peer list to:', request.requesterId, 'players:', gameState.value.players.length)
     })
 
     // Обработка обновления списка peer'ов
     peerService.onMessage('peer_list_update', async (message) => {
-      const update = message.payload as PeerListUpdatePayload
+      const update = (message as Extract<PeerMessage, { type: 'peer_list_update' }>).payload
       console.log('🔗 Received peer list update:', update)
 
       // Добавляем всех peer'ов в известные
-      const peerIds = update.peers.map(p => p.id)
+      const peerIds = update.peers.map((p: Player) => p.id)
       console.log('📋 All peer IDs from update:', peerIds)
       console.log('🔍 My player ID:', myPlayerId.value)
       console.log('📤 From player ID:', update.fromPlayerId)
@@ -2073,7 +2621,7 @@ export const useGameStore = defineStore('game', () => {
     peerService.onMessage('direct_connection_request', (message, conn) => {
       if (!conn) return
 
-      const request = message.payload as DirectConnectionRequestPayload
+      const request = (message as Extract<PeerMessage, { type: 'direct_connection_request' }>).payload
       console.log('Received direct connection request:', request)
 
       // Добавляем peer'а в известные
@@ -2085,7 +2633,7 @@ export const useGameStore = defineStore('game', () => {
 
     // Обработка синхронизации состояния
     peerService.onMessage('state_sync', (message) => {
-      const sync = message.payload as StateSyncPayload
+      const sync = (message as Extract<PeerMessage, { type: 'state_sync' }>).payload
       console.log('Received state sync:', sync)
 
       // Если получили более свежее состояние игры - обновляем
@@ -2097,15 +2645,15 @@ export const useGameStore = defineStore('game', () => {
 
     // Обработка выборов нового хоста
     peerService.onMessage('new_host_election', (message) => {
-      const election = message.payload as NewHostElectionPayload
+      const election = (message as Extract<PeerMessage, { type: 'new_host_election' }>).payload
       console.log('Received host election:', election)
 
       // Проверяем валидность кандидата
-      const candidate = gameState.value.players.find(p => p.id === election.candidateId)
+      const candidate = gameState.value.players.find((p: Player) => p.id === election.candidateId)
       if (candidate && candidate.authToken === election.candidateToken) {
         // Обновляем хоста если консенсус достигнут
-        const totalPlayers = gameState.value.players.length
-        const supportingPlayers = election.electorsConsensus.length
+        const totalPlayers: number = gameState.value.players.length
+        const supportingPlayers: number = election.electorsConsensus.length
 
         if (supportingPlayers >= Math.ceil(totalPlayers / 2)) {
           console.log('Host election successful, new host:', election.candidateId)
@@ -2123,7 +2671,7 @@ export const useGameStore = defineStore('game', () => {
 
     // Обработка объявлений о восстановлении хоста
     peerService.onMessage('host_recovery_announcement', (message) => {
-      const announcement = message.payload as HostRecoveryAnnouncementPayload
+      const announcement = (message as Extract<PeerMessage, { type: 'host_recovery_announcement' }>).payload
       console.log('🎊 Received host recovery announcement:', announcement)
 
       // Отменяем любые идущие процедуры миграции
@@ -2152,8 +2700,12 @@ export const useGameStore = defineStore('game', () => {
             console.log('🔄 Reconnecting to recovered host:', announcement.recoveredHostId)
             await reconnectToNewHost(announcement.recoveredHostId)
             console.log('✅ Successfully reconnected to recovered host')
-          } catch (error) {
-            console.error('❌ Failed to reconnect to recovered host:', error)
+          } catch (error: unknown) {
+            if (error instanceof Error) {
+              console.error('❌ Failed to reconnect to recovered host:', error.message)
+            } else {
+              console.error('❌ Failed to reconnect to recovered host: Unknown error')
+            }
           }
         }, MESH_RESTORATION_DELAY)
       }
@@ -2177,7 +2729,7 @@ export const useGameStore = defineStore('game', () => {
     gameState.value.hostId = newPeerId
 
     // Обновляем свой ID в списке игроков
-    const myPlayerIndex = gameState.value.players.findIndex(p => p.id === oldHostId)
+      const myPlayerIndex = gameState.value.players.findIndex((p: Player) => p.id === oldHostId)
     if (myPlayerIndex !== -1) {
       gameState.value.players[myPlayerIndex].id = newPeerId
     }
@@ -2223,32 +2775,44 @@ export const useGameStore = defineStore('game', () => {
       await new Promise(resolve => setTimeout(resolve, 500))
 
       // Отправляем запрос с правильным старым ID для поиска существующего игрока
-      peerService.sendMessage(targetHostId, {
-        type: 'join_request',
-        payload: {
-          nickname: myNickname.value,
-          savedPlayerId: originalPlayerId // Используем СТАРЫЙ ID для поиска существующего игрока
-        }
-      })
+      peerService.sendMessage(
+        targetHostId,
+        makeMessage(
+          'join_request',
+          {
+            nickname: myNickname.value,
+            savedPlayerId: originalPlayerId // Используем СТАРЫЙ ID для поиска существующего игрока
+          },
+          { roomId: roomId.value || gameState.value.roomId, fromId: myPlayerId.value, ts: Date.now() }
+        )
+      )
 
       // Ждем немного для обработки подключения
       await new Promise(resolve => setTimeout(resolve, 300))
 
       // Запрашиваем актуальное состояние игры
-      peerService.sendMessage(targetHostId, {
-        type: 'request_game_state',
-        payload: {requesterId: myPlayerId.value}
-      })
+      peerService.sendMessage(
+        targetHostId,
+        makeMessage(
+          'request_game_state',
+          { requesterId: myPlayerId.value },
+          { roomId: roomId.value || gameState.value.roomId, fromId: myPlayerId.value, ts: Date.now() }
+        )
+      )
 
       // КРИТИЧНО: Запрашиваем список peer'ов для mesh-соединений
-      peerService.sendMessage(targetHostId, {
-        type: 'request_peer_list',
-        payload: {
-          requesterId: myPlayerId.value,
-          requesterToken: '',
-          timestamp: Date.now()
-        }
-      })
+      peerService.sendMessage(
+        targetHostId,
+        makeMessage(
+          'request_peer_list',
+          {
+            requesterId: myPlayerId.value,
+            requesterToken: '',
+            timestamp: Date.now()
+          },
+          { roomId: roomId.value || gameState.value.roomId, fromId: myPlayerId.value, ts: Date.now() }
+        )
+      )
 
       // Ждем получения обновленного состояния
       await waitForGameStateUpdate()
@@ -2271,12 +2835,12 @@ export const useGameStore = defineStore('game', () => {
         attempts++
 
         // Проверяем, что у нас есть актуальные данные игроков
-        const hasValidPlayers = gameState.value.players.length > 0 &&
-          gameState.value.players.some(p => p.nickname && p.nickname !== '')
+    const hasValidPlayers = gameState.value.players.length > 0 &&
+      gameState.value.players.some((p: Player) => p.nickname && p.nickname !== '')
 
         // Проверяем корректность litUpPlayerId - если указан, то игрок должен существовать
         const litUpPlayerValid = !gameState.value.litUpPlayerId ||
-          gameState.value.players.some(p => p.id === gameState.value.litUpPlayerId)
+          gameState.value.players.some((p: Player) => p.id === gameState.value.litUpPlayerId)
 
         if ((hasValidPlayers && litUpPlayerValid) || attempts >= maxAttempts) {
           // Очищаем некорректный litUpPlayerId если игрок не найден
@@ -2366,6 +2930,129 @@ export const useGameStore = defineStore('game', () => {
     {deep: true}
   )
 
+  // -------- Клиентские экшены-обертки: отправка сообщений хосту --------
+
+  const clientDrawQuestion = () => {
+    if (!gameState.value.currentTurnPlayerId) return
+    if (isHost.value) {
+      // Хост выполняет локально в свой ход
+      drawCard(myPlayerId.value)
+    } else {
+      // Клиент отправляет явный свой ID
+      peerService.sendMessage(
+        hostId.value,
+        makeMessage(
+          'draw_question_request',
+          { playerId: myPlayerId.value },
+          { roomId: roomId.value || gameState.value.roomId, fromId: myPlayerId.value, ts: Date.now() }
+        )
+      )
+    }
+  }
+
+  const clientSubmitVote = (votes: string[]) => {
+    if (isHost.value) {
+      submitVote(myPlayerId.value, votes)
+    } else {
+      peerService.sendMessage(
+        hostId.value,
+        makeMessage(
+          'submit_vote',
+          { voterId: myPlayerId.value, targetIds: votes },
+          { roomId: roomId.value || gameState.value.roomId, fromId: myPlayerId.value, ts: Date.now() }
+        )
+      )
+    }
+  }
+
+  const clientSubmitBet = (bet: '0' | '+-' | '+') => {
+    if (isHost.value) {
+      submitBet(myPlayerId.value, bet)
+    } else {
+      peerService.sendMessage(
+        hostId.value,
+        makeMessage(
+          'submit_bet',
+          { playerId: myPlayerId.value, bet },
+          { roomId: roomId.value || gameState.value.roomId, fromId: myPlayerId.value, ts: Date.now() }
+        )
+      )
+    }
+  }
+
+  const clientSubmitAnswer = (answer: string) => {
+    if (isHost.value) {
+      // Хост локально заполняет и двигает фазу
+      if (gamePhase.value === 'answering' && myPlayerId.value === gameState.value.answeringPlayerId) {
+        gameState.value.advancedAnswer = answer
+        gamePhase.value = 'guessing'
+        gameState.value.phase = 'guessing'
+        broadcastGameState()
+      }
+    } else {
+      peerService.sendMessage(
+        hostId.value,
+        makeMessage(
+          'submit_answer',
+          { playerId: myPlayerId.value, answer },
+          { roomId: roomId.value || gameState.value.roomId, fromId: myPlayerId.value, ts: Date.now() }
+        )
+      )
+    }
+  }
+
+  const clientSubmitGuess = (guess: string) => {
+    if (isHost.value) {
+      if (!gameState.value.guesses) gameState.value.guesses = {}
+      gameState.value.guesses[myPlayerId.value] = guess
+      broadcastGameState()
+    } else {
+      peerService.sendMessage(
+        hostId.value,
+        makeMessage(
+          'submit_guess',
+          { playerId: myPlayerId.value, guess },
+          { roomId: roomId.value || gameState.value.roomId, fromId: myPlayerId.value, ts: Date.now() }
+        )
+      )
+    }
+  }
+
+  // Любой игрок (хост или клиент) может запросить следующий раунд после консенсуса
+  const clientNextRound = () => {
+    if (isHost.value) {
+      // Хост выполняет локально ту же логику
+      if (gamePhase.value !== 'results' && gamePhase.value !== 'advanced_results') return
+
+      const totalPlayers = gameState.value.players.length
+
+      if (gameMode.value === 'basic') {
+        const allVoted = Object.keys(gameState.value.votes || {}).length >= totalPlayers
+        const allBet = Object.keys(gameState.value.bets || {}).length >= totalPlayers
+        const resultsReady = gamePhase.value === 'results'
+        if (!(allVoted && allBet && resultsReady)) return
+      } else {
+        const votedCount = Object.keys(gameState.value.votes || {}).length
+        const guessesCount = Object.keys(gameState.value.guesses || {}).filter(pid => pid !== gameState.value.answeringPlayerId).length
+        const requiredGuesses = Math.max(0, totalPlayers - 1)
+        const resultsReady = gamePhase.value === 'advanced_results'
+        if (!(votedCount >= totalPlayers && guessesCount >= requiredGuesses && resultsReady)) return
+      }
+
+      finishRoundHostOnly()
+    } else {
+      // Клиент отправляет запрос хосту
+      peerService.sendMessage(
+        hostId.value,
+        makeMessage(
+          'next_round_request',
+          { playerId: myPlayerId.value },
+          { roomId: roomId.value || gameState.value.roomId, fromId: myPlayerId.value, ts: Date.now() }
+        )
+      )
+    }
+  }
+
   return {
     // State
     gameState,
@@ -2376,25 +3063,38 @@ export const useGameStore = defineStore('game', () => {
     roomId,
     connectionStatus,
     gameMode,
+    gamePhase,
 
     // Computed
     canStartGame,
     myPlayer,
     canJoinRoom,
+    currentRound,
+    currentMode,
+    roundsLeft,
 
     // Actions
     createRoom,
     joinRoom,
     startGame,
     lightUpPlayer,
+    // Host-side direct actions (используются хостом)
     drawCard,
     submitVote,
     submitBet,
-    finishRound,
+    finishRound: finishRoundHostOnly,
     leaveRoom,
     broadcastGameState,
 
-    // Advanced mode actions
+    // Client-side actions (обертки, отправка сообщений)
+    drawQuestion: clientDrawQuestion,
+    sendVote: clientSubmitVote,
+    sendBet: clientSubmitBet,
+    sendAnswer: clientSubmitAnswer,
+    sendGuess: clientSubmitGuess,
+    nextRound: clientNextRound,
+
+    // Advanced mode actions (удерживаем, но использовать следует клиентские обертки)
     submitAnswer: (playerId: string, answer: string) => {
       if (!gameState.value.answers) gameState.value.answers = {};
       gameState.value.answers[playerId] = answer;
