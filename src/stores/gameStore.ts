@@ -333,6 +333,21 @@ export const useGameStore = defineStore('game', () => {
 
   // ВАЖНО: drawCard вызывается на стороне хоста (локально у хоста), но инициироваться может клиентом через draw_question_request.
   // Не полагаемся на myPlayerId на хосте, а проверяем requesterId, который передаём из обработчика сообщения.
+  // Сброс состояния голосования/ставок/аггрегатов перед началом нового голосования
+  const resetVotingState = () => {
+    // Очищаем данные предыдущего раунда голосования, чтобы старые выборы не учитывались
+    gameState.value.votes = {}
+    gameState.value.voteCounts = {}
+    gameState.value.bets = {}
+    // В advanced режиме также чистим связанные выборы/победителей текущего раунда
+    if (gameMode.value === 'advanced') {
+      gameState.value.guesses = {}
+      ;(gameState.value as any).roundWinners = []
+      gameState.value.answeringPlayerId = null
+      gameState.value.advancedAnswer = null
+    }
+  }
+
   const drawCard = async (requesterId?: string | null) => {
     logAction('drawCard_request', { requesterId })
     // Действие разрешено только в фазе вытягивания вопроса
@@ -382,10 +397,16 @@ export const useGameStore = defineStore('game', () => {
     gamePhase.value = 'drawing_question'
     broadcastGameState()
 
+    // Перед началом нового голосования очищаем результаты предыдущего раунда,
+    // чтобы старый выбор не учитывался в новом раунде
+    resetVotingState()
+
     // После того как вопрос установлен и разослан в фазе drawing_question,
     // сразу переходим к голосованию, чтобы шаблон показывал одновременно карточку и голосование.
     // Карточка вопроса будет отображаться в секции голосования (см. GameField.vue).
     // На всякий случай синхронизируем режим перед выбором следующей фазы
+    // ВАЖНО: перед началом нового голосования очищаем результаты предыдущего (старые выборы/ставки)
+    resetVotingState()
     gameMode.value = currentMode.value
     gameState.value.gameMode = currentMode.value
     const nextPhase = gameMode.value === 'basic' ? 'voting' : 'secret_voting'
@@ -395,6 +416,7 @@ export const useGameStore = defineStore('game', () => {
 
     return card
   }
+
 
   // Игрок делает голос: votesArr — массив из двух id выбранных игроков
   const submitVote = (voterId: string, votesArr: string[]) => {

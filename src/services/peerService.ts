@@ -61,7 +61,7 @@ class PeerService {
     onGracePeriodEndCallback: null as (() => void) | null
   }
   
-  // Создание хоста с обязательным сохранением ID в localStorage
+  // Создание хоста с обязательным сохранением UUID в localStorage
   async createHost(roomId?: string): Promise<string> {
     return new Promise((resolve, reject) => {
       let targetPeerId: string | null = null
@@ -74,21 +74,14 @@ class PeerService {
         }
       }
       
-      // Если ID не найден в storageSafe - создаем новый
+      // Если ID не найден в storageSafe - создаем новый UUID (всегда UUID для хоста)
       if (targetPeerId) {
         console.log('🔄 Attempting to restore host with saved ID:', targetPeerId)
         this.peer = new Peer(targetPeerId)
       } else {
-        // Генерируем ДЕТЕРМИНИРОВАННЫЙ ID на основе roomId, чтобы клиенты могли
-        // переподключаться к тому же ID после реконнекта (исключаем случайные UUID).
-        const deterministicId = roomId ? `room-${roomId}` : undefined
-        if (deterministicId) {
-          console.log('🆕 Creating new host with deterministic ID:', deterministicId)
-          this.peer = new Peer(deterministicId)
-        } else {
-          console.log('🆕 Creating new host with random ID (no roomId provided)')
-          this.peer = new Peer()
-        }
+        // Всегда создаём новый Peer без детерминированных room-идентификаторов (PeerJS сгенерирует UUID)
+        console.log('🆕 Creating new host with random UUID (no saved host ID)')
+        this.peer = new Peer()
       }
       
       this.peer.on('open', (id) => {
@@ -119,33 +112,8 @@ class PeerService {
         }
         console.error('Peer error:', error)
         
-        // Если не удалось восстановить/занять ID (занят), пробуем пересоздать Peer С ТЕМ ЖЕ deterministic ID
-        const errType = (error as any)?.type
-        if ((errType === 'unavailable-id' || errType === 'server-error' || errType === 'network') && roomId) {
-          console.log('⚠️ Peer error type:', errType, '— attempting recreate with the SAME deterministic ID')
-          try {
-            // Пробуем мягко отключить текущий экземпляр перед пересозданием
-            try { this.peer?.disconnect() } catch {}
-            try { this.peer?.destroy() } catch {}
-          } catch {}
-          
-          const deterministicId = `room-${roomId}`
-          this.peer = new Peer(deterministicId)
-          
-          this.peer.on('open', (newId) => {
-            console.log('🔁 Host recreated with the SAME deterministic ID:', newId)
-            // Обновляем сохранённый ID для комнаты
-            this.saveHostPeerId(roomId, newId)
-            resolve(newId)
-          })
-          
-          this.peer.on('error', (newError) => {
-            console.error('❌ Failed to recreate Peer with deterministic ID:', (newError as any)?.type || newError)
-            reject(newError)
-          })
-        } else {
-          reject(error)
-        }
+        // Отдаём ошибку наверх
+        reject(error)
       })
       
       this.peer.on('connection', (conn) => {

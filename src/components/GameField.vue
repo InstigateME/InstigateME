@@ -393,7 +393,7 @@
           <!-- Debug panel -->
           <div v-if="isDebug" class="debug-panel">
             <div class="debug-actions">
-              <button class="btn-secondary" @click="copyDebug">Copy Debug</button>
+              <button class="btn-debug" @click="copyDebug">Copy Debug</button>
               <span v-if="copiedOk" class="copy-status">Скопировано</span>
               <span v-else class="copy-hint">Снимок состояния ниже</span>
             </div>
@@ -666,6 +666,22 @@ const onSendGuess = () => {
   }
 }
 const selectedWinners = ref<string[]>([])
+/**
+ * Сбрасываем выбранных победителей:
+ * - при входе в фазу selecting_winners
+ * - при монтировании компонента (страховка от артефактов при горячей перезагрузке/ре-коннекте)
+ */
+watch(phase, (ph) => {
+  if (ph === 'selecting_winners') {
+    selectedWinners.value = []
+  }
+})
+import { onMounted } from 'vue'
+onMounted(() => {
+  if (phase.value === 'selecting_winners') {
+    selectedWinners.value = []
+  }
+})
 const selectablePlayers = computed(() =>
   // Только игроки, у которых есть guess, исключая автора ответа (chooser) и самого себя (на клиенте)
   players.value.filter(p =>
@@ -861,6 +877,46 @@ watch([() => gameStore.gameState.gameStarted, myId], ([started, id]: [boolean | 
   align-items: center;
   gap: 8px;
   margin-bottom: 6px;
+}
+
+/* Кнопка Copy Debug — заметная, но не кричащая */
+.btn-debug {
+  appearance: none;
+  border: 1px solid #cfe2ff;
+  background: linear-gradient(135deg, #eef6ff 0%, #e9f2ff 100%);
+  color: #1e40af;
+  font-weight: 800;
+  font-size: 0.9rem;
+  padding: 8px 12px;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: transform 0.12s ease, box-shadow 0.2s ease, border-color 0.2s ease, background 0.2s ease, color 0.2s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.btn-debug::before {
+  content: "⧉";
+  font-size: 0.95rem;
+  line-height: 1;
+}
+.btn-debug:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 14px rgba(30, 64, 175, 0.12);
+  border-color: #bcd6ff;
+  background: linear-gradient(135deg, #eaf3ff 0%, #e3eeff 100%);
+}
+.btn-debug:active {
+  transform: translateY(0);
+  box-shadow: 0 4px 10px rgba(30, 64, 175, 0.12) inset;
+}
+.btn-debug:focus {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.25);
+}
+.btn-debug:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 .copy-status {
   color: #166534;
