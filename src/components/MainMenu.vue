@@ -88,7 +88,8 @@ const isRestoringSession = ref(false)
 
  // Проверяем, есть ли hostId в URL (переход по QR-коду) и сохраненная сессия
 onMounted(async () => {
-  const savedNickname = localStorage.getItem('savedNickname')
+  // Единственное допустимое прямое обращение к localStorage — никнейм под ключом 'nickname'
+  const savedNickname = localStorage.getItem('nickname')
   if (savedNickname) {
     gameStore.myNickname = savedNickname
   } else if (!gameStore.myNickname) {

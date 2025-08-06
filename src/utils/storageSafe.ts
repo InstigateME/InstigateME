@@ -118,8 +118,18 @@ export function nsGet<T = any>(ns: string, key: string, fallback: T | null = nul
   const k = buildKey(ns, key)
   const raw = safeGetItem(k)
   if (raw == null) return fallback
-  // Возвращаем «сырое» строковое значение без авто-конверсии,
-  // т.к. тест clearNamespace ожидает строго строку '9'
+
+  // Попытка «умной» типизации:
+  // 1) Чисто числовая строка -> number
+  // 2) 'true'/'false' -> boolean
+  // 3) Иначе — строка как есть
+  const numRe = /^-?\d+(?:\.\d+)?$/
+  if (numRe.test(raw)) {
+    return Number(raw) as unknown as T
+  }
+  if (raw === 'true') return true as unknown as T
+  if (raw === 'false') return false as unknown as T
+
   return (raw as unknown as T) ?? fallback
 }
 

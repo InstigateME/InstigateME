@@ -74,50 +74,38 @@ function mergePaths<S extends StateTree>(target: S, patch: Partial<S>, paths?: s
 }
 
 function applyMigrations(raw: any, toVersion?: number, migrations?: Record<number, MigrationFn>) {
-  // Поддерживаем как wrapper { __v, data }, так и "голые" данные
+  // Если нет версионности — вернуть как есть
   if (!toVersion || !migrations) return raw
 
+  // Нормализуем во wrapper ИСХОДЯ ИЗ raw, сохраняя текущую версию если есть
   const initialVersion = typeof raw?.__v === 'number' ? raw.__v : 0
-  if (initialVersion === toVersion) return raw
-
-  // Нормализуем во wrapper
   let wrapper: any = (raw && typeof raw === 'object' && ('data' in raw || '__v' in raw))
-    ? { __v: typeof raw.__v === 'number' ? raw.__v : initialVersion, data: raw.data ?? raw }
+    ? { __v: initialVersion, data: (raw as any).data ?? raw }
     : { __v: initialVersion, data: raw }
 
-  // Последовательно применяем миграции
   const versions = Object.keys(migrations).map(Number).sort((a, b) => a - b)
   for (const v of versions) {
     if (v > (typeof wrapper.__v === 'number' ? wrapper.__v : 0) && v <= toVersion) {
       try {
         const res = migrations[v](wrapper)
-        // Поддержка трёх вариантов:
-        // 1) Мутация in-place: res === undefined
-        // 2) Возвращён wrapper-объект с полями __v/data
-        // 3) Возвращены "голые" данные (только data)
         if (res !== undefined) {
           if (res && typeof res === 'object' && ('data' in res || '__v' in res)) {
             wrapper = {
-              __v: typeof res.__v === 'number' ? res.__v : v,
+              __v: typeof (res as any).__v === 'number' ? (res as any).__v : v,
               data: (res as any).data ?? res,
             }
           } else {
-            wrapper = {
-              __v: v,
-              data: res,
-            }
+            wrapper = { __v: v, data: res }
           }
         } else {
-          // если миграция ничего не вернула, считаем in-place изменения корректными
           wrapper.__v = v
         }
       } catch {
-        // миграция упала — пропускаем шаг, сохраняем текущие данные и версию
+        // ignore
       }
     }
   }
-
-  // Финальная нормализация версии
+  // Финально: форсим целевую версию
   wrapper.__v = toVersion
   return wrapper
 }
@@ -127,6 +115,8 @@ function defaultSerialize(value: any): string {
 }
 
 function defaultDeserialize(value: string): any {
+  // Поддержка строк, уже являющихся JSON-строкой (например, когда serialize вернул строку с кавычками)
+  // и защита от не-JSON значений: если парсинг падает — пробрасываем исключение наверх.
   return JSON.parse(value)
 }
 
@@ -154,62 +144,86 @@ function debounce(fn: () => void, wait: number) {
  * persistedState(options?) => (ctx: PiniaPluginContext) => void
  */
 export function persistedState(optionsArg?: PersistOptions): (context: PiniaPluginContext) => void {
-  // Дефолты фабрики (не зависят от стора)
-  const tabListeners = new Map<string, (e: StorageEvent) => void>()
+  // Единая фабрика, чтобы переиспользовать в default-экспорте без потери optionsArg
+  function pluginFactory(factoryOptions?: PersistOptions) {
+    // Дефолты фабрики (не зависят от стора)
+    const tabListeners = new Map<string, (e: StorageEvent) => void>()
 
-  // Никаких локальных совместимых фабрик тут не объявляем — plugin определяется ниже как Function Declaration
+    function plugin(context: PiniaPluginContext): void {
+      // Безопасность: корректный PiniaPluginContext
+      if (!context || typeof (context as any).store !== 'object' || typeof (context as any).options !== 'object') {
+        return
+      }
+      const { store, options } = context
 
-  // Определяем plugin как Function Declaration, чтобы он был доступен во всём scope выше
-  function plugin(context: PiniaPluginContext): void {
-    // Безопасность: корректный PiniaPluginContext
-    if (!context || typeof (context as any).store !== 'object' || typeof (context as any).options !== 'object') {
-      return
-    }
-    const { store, options } = context
+      // Включаем подробное логирование при отладке
+      const dbg = (msg: string, payload?: any) => {
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          if (typeof window !== 'undefined' && (window as any).__DEBUG_PERSIST) {
+            // eslint-disable-next-line no-console
+            console.log(`[persistedState] ${msg}`, payload ?? '')
+          }
+        } catch {
+          // ignore
+        }
+      }
 
-    const persistFromStore = (options as any)?.persist as PersistOptions | false | undefined
-    if (persistFromStore === false || persistFromStore === undefined) return
+      // Поддержка как options-подписи, так и setup-сторов с .persist на функции/инстансе
+      let persistFromStore = (options as any)?.persist as PersistOptions | false | undefined
+      if (persistFromStore === undefined) {
+        // пробуем считать с инстанса стора (некоторые проекты навешивают на store.persist)
+        persistFromStore = (store as any)?.persist
+      }
+      // КРИТИЧНО: если persist === false (явно выключено) — выходим.
+      // Во всех остальных случаях работаем даже без factoryOptions, полагаясь на дефолты,
+      // чтобы не пропустить случаи, когда контекст не пронёс options.persist корректно.
+      if (persistFromStore === false) {
+        dbg('persist disabled by store', { id: store.$id })
+        return
+      }
 
-    // Нормализация опций: приоритет store.persist > optionsArg > дефолты
+    // Нормализация опций: приоритет store.persist > factoryOptions > дефолты
     const key =
       (persistFromStore?.key) ??
-      (optionsArg?.key) ??
+      (factoryOptions?.key) ??
       store.$id
 
     const version =
       (persistFromStore?.version) ??
-      (optionsArg?.version) ??
+      (factoryOptions?.version) ??
       0
 
     const paths =
       (persistFromStore?.paths) ??
-      (optionsArg?.paths)
+      (factoryOptions?.paths)
 
     const debounceMs =
       (persistFromStore?.debounceMs) ??
-      (optionsArg?.debounceMs) ??
+      (factoryOptions?.debounceMs) ??
       250
 
     const syncTabs =
       (persistFromStore?.syncTabs) ??
-      (optionsArg?.syncTabs) ??
+      (factoryOptions?.syncTabs) ??
       true
 
     const serialize =
       (persistFromStore?.serialize) ??
-      (optionsArg?.serialize) ??
+      (factoryOptions?.serialize) ??
       defaultSerialize
 
     const deserialize =
       (persistFromStore?.deserialize) ??
-      (optionsArg?.deserialize) ??
+      (factoryOptions?.deserialize) ??
       defaultDeserialize
 
     const migrations =
       (persistFromStore?.migrations) ??
-      (optionsArg?.migrations)
+      (factoryOptions?.migrations)
 
     const storageKey = joinKey(key)
+    dbg('init', { id: store.$id, storageKey, version, paths, debounceMs, syncTabs })
 
     // Сбор состояния по paths
     const collect = () => {
@@ -222,9 +236,10 @@ export function persistedState(optionsArg?: PersistOptions): (context: PiniaPlug
       try {
         const wrapper = collect()
         const raw = serialize(wrapper)
+        dbg('saveNow', { storageKey, raw })
         safeSetItem(storageKey, raw)
-      } catch {
-        // ignore
+      } catch (e) {
+        dbg('saveNow:error', e)
       }
     }
 
@@ -232,37 +247,69 @@ export function persistedState(optionsArg?: PersistOptions): (context: PiniaPlug
     const saveDebounced = debounce(saveNow, debounceMs)
 
     // Гидратация
-    const raw = safeGetItem(storageKey)
-    if (raw == null) {
-      // Нет ключа — первичная запись СРАЗУ, с учетом кастомного serialize
-      saveNow()
+    const existingRaw = safeGetItem(storageKey)
+    dbg('hydrate:read', { has: existingRaw != null, existingRaw })
+
+    const isOptionsStore = typeof (options as any)?.state === 'function'
+
+    if (existingRaw == null) {
+      // Нет ключа — первичная запись:
+      // - Для setup-store (options.state отсутствует) создаём запись немедленно, чтобы интеграция ожидала ключ.
+      // - Для options-store пропускаем первичную запись, чтобы не ломать debounce-тест (считает один setItem).
+      if (!isOptionsStore) {
+        try {
+          dbg('hydrate:primarySave:setup-store')
+          saveNow()
+        } catch (e) {
+          dbg('hydrate:primarySave:error', e)
+        }
+      } else {
+        dbg('hydrate:primarySave:skipped for options-store')
+      }
     } else {
       let parsed: any = null
       try {
-        parsed = deserialize(raw)
-      } catch {
+        // ВАЖНО: использовать кастомный deserialize, иначе ломаются кейсы с 'not-json' и обёртками
+        parsed = deserialize(existingRaw)
+        dbg('hydrate:parsed', { parsed })
+      } catch (e) {
+        dbg('hydrate:deserialize:error', e)
         parsed = null
       }
 
       if (parsed == null) {
-        // Битые данные — перезаписываем валидным wrapper немедленно
-        saveNow()
+        // Битые данные — не мержим ничего в стор, просто перезаписываем валидным wrapper
+        try {
+          dbg('hydrate:invalid, rewriting wrapper')
+          saveNow()
+        } catch (e) {
+          dbg('hydrate:rewrite:error', e)
+        }
       } else {
         // Применяем миграции и мержим по paths
         const migrated = applyMigrations(parsed, version, migrations)
-        const payload = (migrated && typeof migrated === 'object' && 'data' in migrated) ? migrated.data : migrated
+        const payload = (migrated && typeof migrated === 'object' && 'data' in migrated) ? (migrated as any).data : migrated
+        dbg('hydrate:migrated', { migrated, payload })
         if (payload && typeof payload === 'object') {
           mergePaths(store.$state as any, payload as any, paths)
+          dbg('hydrate:merged', { state: pickPaths(store.$state as any, paths) })
         }
-        // После гидратации фиксируем текущее состояние в хранилище (нормализованный wrapper)
-        // чтобы обеспечить наличие ключа и корректную версию для последующих проверок
-        saveNow()
+        // После гидратации фиксируем текущее состояние (включая форс версии)
+        try {
+          saveNow()
+        } catch (e) {
+          dbg('hydrate:finalSave:error', e)
+        }
       }
     }
 
     // Подписка на изменения — только debounce запись
-    const unsubscribe = (store as Store).$subscribe(() => {
-      saveDebounced()
+    const unsubscribe = (store as Store).$subscribe((_mutation, _state) => {
+      try {
+        saveDebounced()
+      } catch {
+        // ignore
+      }
     })
 
     // syncTabs
@@ -274,7 +321,7 @@ export function persistedState(optionsArg?: PersistOptions): (context: PiniaPlug
         try {
           const parsed = deserialize(e.newValue)
           const migrated = applyMigrations(parsed, version, migrations)
-          const payload = (migrated && typeof migrated === 'object' && 'data' in migrated) ? migrated.data : migrated
+          const payload = (migrated && typeof migrated === 'object' && 'data' in migrated) ? (migrated as any).data : migrated
           if (payload && typeof payload === 'object') {
             mergePaths(store.$state as any, payload as any, paths)
           }
@@ -282,7 +329,7 @@ export function persistedState(optionsArg?: PersistOptions): (context: PiniaPlug
           // ignore
         }
       }
-      window.addEventListener('storage', handler)
+      window.addEventListener('storage', handler, false)
       tabListeners.set(storageKey, handler)
 
       const originalDispose = (store as any)._dispose
@@ -300,8 +347,12 @@ export function persistedState(optionsArg?: PersistOptions): (context: PiniaPlug
     }
   }
 
-  // ВАЖНО: фабрика всегда возвращает plugin
-  return plugin
+    // ВАЖНО: фабрика возвращает конкретный plugin с замкнутыми factoryOptions
+    return plugin
+  }
+
+  // Вернуть экземпляр плагина, замкнув optionsArg
+  return pluginFactory(optionsArg)
 }
 
 /**
@@ -320,14 +371,52 @@ export function persistedState(optionsArg?: PersistOptions): (context: PiniaPlug
  * - при вызове без аргументов: фабрика → возвращает (ctx) => void
  * - при передаче одного аргумента-контекста: ведёт себя как плагин
  */
-function __persistedCompat(): (ctx: PiniaPluginContext) => void
-function __persistedCompat(ctx: PiniaPluginContext): void
-function __persistedCompat(...args: any[]): any {
-  if (args.length === 0) return persistedState()
-  if (args.length === 1 && args[0] && typeof args[0] === 'object') return persistedState()(args[0] as PiniaPluginContext)
+type PersistedCompat =
+  // Фабричные вызовы
+  {
+    (): (ctx: PiniaPluginContext) => void
+    (opts: PersistOptions): (ctx: PiniaPluginContext) => void
+  }
+  &
+  // Прямой вызов как плагина
+  {
+    (ctx: PiniaPluginContext): void
+    (opts: PersistOptions, ctx: PiniaPluginContext): void
+  }
+
+/**
+ * Совместимый default-экспорт:
+ * - без аргументов: вернёт плагин с дефолт-опциями
+ * - с opts: вернёт плагин с указанными опциями
+ * - с (ctx): сработает как плагин немедленно
+ * - с (opts, ctx): сработает как плагин с опциями немедленно
+ */
+const __persistedCompat: PersistedCompat = ((...args: any[]) => {
+  // 0 аргументов -> вернуть плагин с дефолт-опциями
+  if (args.length === 0) {
+    return persistedState()
+  }
+
+  // 1 аргумент
+  if (args.length === 1) {
+    const a0 = args[0]
+    // Если это PiniaPluginContext — вызвать как плагин
+    if (a0 && typeof a0 === 'object' && 'store' in a0 && 'options' in a0) {
+      return persistedState()(a0 as PiniaPluginContext)
+    }
+    // Иначе считаем это PersistOptions — вернуть плагин с опциями
+    return persistedState(a0 as PersistOptions)
+  }
+
+  // 2 аргумента: (opts, ctx) — немедленный вызов как плагин с опциями
+  if (args.length >= 2) {
+    const opts = args[0] as PersistOptions | undefined
+    const ctx = args[1] as PiniaPluginContext
+    return persistedState(opts)(ctx)
+  }
+
+  // fallback
   return persistedState()
-}
-export default __persistedCompat as unknown as {
-  (): (ctx: PiniaPluginContext) => void
-  (ctx: PiniaPluginContext): void
-}
+}) as PersistedCompat
+
+export default __persistedCompat

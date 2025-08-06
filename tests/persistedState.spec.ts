@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createPinia, defineStore, setActivePinia } from 'pinia'
+// включаем диагностическое логирование persistedState
+;(window as any).__DEBUG_PERSIST = true
 import persistedState from '../src/plugins/persistedState'
 
 const STORAGE_PREFIX = '__app_'
@@ -290,11 +292,12 @@ describe('persistedState — дополнительные кейсы', () => {
       },
     }
     localStorage.setItem(storageKey(key), JSON.stringify(otherPayload))
+    // В jsdom StorageEventInit.storageArea строгого типа Storage может вызывать ошибку,
+    // обработчик плагина не полагается на storageArea — создадим событие без него.
     window.dispatchEvent(new StorageEvent('storage', {
       key: storageKey(key),
       newValue: JSON.stringify(otherPayload),
-      oldValue: null,
-      storageArea: localStorage,
+      oldValue: null
     } as any))
 
     expect(s.a).toBe(10)

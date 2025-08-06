@@ -100,7 +100,8 @@ describe('storageSafe', () => {
     expect(storageSafe.nsGet('game', 'a')).toBeNull()
     expect(storageSafe.nsGet('game', 'b')).toBeNull()
     // peer остаётся нетронутым
-    expect(storageSafe.nsGet('peer', 'x')).toBe('9')
+    // nsGet теперь делает умную типизацию, поэтому ожидаем число 9
+    expect(storageSafe.nsGet('peer', 'x')).toBe(9)
   })
 
   it('cleanupExpiredInNamespace: удаляет только истёкшие TTL записи', () => {

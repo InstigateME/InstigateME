@@ -1,11 +1,17 @@
 <template>
   <div class="lobby">
-    <div class="container">
+    <div class="container" :aria-busy="gameStore.uiConnecting">
       <div class="header">
         <h1 class="title">Комната</h1>
         <button class="leave-btn" @click="leaveRoom">
           Покинуть комнату
         </button>
+      </div>
+
+      <!-- Баннер восстановления/переподключения -->
+      <div v-if="gameStore.uiConnecting" class="reconnect-banner" role="status" aria-live="polite">
+        <span class="dot" aria-hidden="true"></span>
+        Восстановление соединения...
       </div>
 
       <!-- Хост секция -->
@@ -47,7 +53,8 @@
           <button
             class="btn btn-primary btn-large"
             @click="startGame"
-            :disabled="!gameStore.canStartGame"
+            :disabled="!gameStore.canStartGame || gameStore.uiConnecting"
+            aria-disabled="true"
           >
             {{ gameStore.canStartGame ? 'Начать игру' : `Ожидание игроков (${gameStore.gameState.players.length}/2)` }}
           </button>
@@ -57,7 +64,7 @@
 
       <!-- Клиент секция -->
       <div v-else class="client-section">
-        <div class="waiting-message">
+        <div class="waiting-message" :aria-busy="gameStore.uiConnecting">
           <h3>Ожидание начала игры...</h3>
           <p>Хост начнет игру, когда будет готов</p>
         </div>
@@ -67,7 +74,7 @@
 
       <div class="players-section">
         <h3>Игроки в комнате ({{ gameStore.gameState.players.length }}/{{ gameStore.gameState.maxPlayers }}):</h3>
-        <div class="players-list">
+        <div class="players-list" :style="{ pointerEvents: gameStore.uiConnecting ? 'none' : 'auto', opacity: gameStore.uiConnecting ? 0.6 : 1 }">
           <div
             v-for="player in gameStore.gameState.players"
             :key="player.id"
@@ -202,13 +209,19 @@ watch(() => gameStore.gameState.gameStarted, (started) => {
   }
 })
 
-onMounted(() => {
-  // Если идет восстановление/переподключение — пока показываем текущий экран
-  if (gameStore.connectionStatus === 'connecting') {
-    return
+onMounted(async () => {
+  // Стартуем восстановление сессии при входе в лобби.
+  // Покажем баннер блокировки через uiConnecting (см. шаблон ниже).
+  try {
+    // Запускаем restore только если еще не подключены
+    if (gameStore.connectionStatus !== 'connected') {
+      await gameStore.restoreSession()
+    }
+  } catch (e) {
+    console.warn('Lobby restoreSession failed:', e)
   }
 
-  // Проверяем, что мы в комнате
+  // Если после попытки восстановления нет моего playerId — уходим на главную
   if (!gameStore.myPlayerId) {
     router.push('/')
     return
@@ -221,9 +234,9 @@ onMounted(() => {
     return
   }
 
-  // Генерируем QR-код для хоста
-  if (gameStore.isHost) {
-    generateQRCode()
+  // Перегенерация QR только для хоста и только после успешного восстановления/подключения
+  if (gameStore.isHost && gameStore.connectionStatus === 'connected') {
+    await generateQRCode()
   }
 })
 </script>
