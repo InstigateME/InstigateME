@@ -373,6 +373,18 @@
         </div>
 
         <!-- Нижняя панель состояния -->
+
+        <!-- Глобальная кнопка «Продолжить»: видят все, активна только у хоста; подтверждение перед действием -->
+        <div class="continue-global" v-if="isHost">
+          <button
+            class="btn-continue btn-continue--global"
+            @click="onForceContinueWithConfirm()"
+            title="Пропустить ожидание и перейти дальше (для хоста)"
+          >
+            Продолжить
+          </button>
+        </div>
+
         <div class="game-info">
           <p class="players-count">
             Игроков: {{ players.length }} • Я: {{ myNickname }} (ID: {{ myIdShort }}) •
@@ -713,6 +725,48 @@ const onFinishRound = () => {
   if (gameStore.connectionStatus !== 'connected') return
   // Разрешаем нажимать «Следующий раунд» кому угодно: хост выполнит локально, клиент отправит запрос next_round_request
   gameStore.nextRound()
+}
+
+// Кнопка «Продолжить» — активна только у хоста.
+// Поведение:
+// - basic: voting -> finishRound (перейдет в betting), betting -> finishRound (results), results -> finishRound (следующий раунд)
+// - advanced: secret_voting завершает submitVote автоматически; здесь:
+//   answering -> finishRound (guessing)
+//   guessing -> finishRound (selecting_winners)
+//   selecting_winners -> ничего не делаем, требуется выбор или «никто не угадал»; если нужно — раскомментировать finishRound
+//   advanced_results -> finishRound (следующий раунд)
+function onForceContinue(): void {
+  if (gameStore.connectionStatus !== 'connected') return
+  if (!isHost.value) return
+
+  const ph = phase.value
+
+  // Всегда принудительно завершаем по кнопке «Продолжить»
+  // Используем публичный API forceContinue(), который внутри вызывает finishRoundHostOnly(true)
+  // Это гарантирует переход даже если не все ставки/действия сделаны.
+  if (typeof (gameStore as any).forceContinue === 'function') {
+    (gameStore as any).forceContinue(ph)
+    return
+  }
+
+  // Fallback: если по каким-то причинам forceContinue недоступен, вызываем finishRound(true) напрямую (если экспортирован под этим именем).
+  if (typeof (gameStore as any).finishRound === 'function') {
+    (gameStore as any).finishRound(true)
+  }
+}
+
+function onForceContinueWithConfirm(e?: Event): void {
+  if (e && typeof e.preventDefault === 'function') e.preventDefault()
+  if (gameStore.connectionStatus !== 'connected') return
+  if (!isHost.value) return
+  try {
+    // eslint-disable-next-line no-alert
+    const ok = confirm('Продолжить раунд, пропустив ожидающих игроков?')
+    if (!ok) return
+  } catch {
+    // если confirm недоступен — считаем подтвержденным
+  }
+  onForceContinue()
 }
 
 const leaveGame = () => {
@@ -1330,6 +1384,58 @@ watch([() => gameStore.gameState.gameStarted, myId], ([started, id]: [boolean | 
   display: flex;
   align-items: center;
   gap: 12px;
+}
+
+/* Кнопка "Продолжить" и панель принудительного перехода */
+.force-continue-bar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
+}
+.btn-continue {
+  appearance: none;
+  border: 1px solid #fde3b1;
+  background: linear-gradient(135deg, #fff4e0 0%, #ffe8bf 100%);
+  color: #854d0e;
+  font-weight: 800;
+  font-size: 0.9rem;
+  padding: 8px 12px;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: transform 0.12s ease, box-shadow 0.2s ease, border-color 0.2s ease, background 0.2s ease, color 0.2s ease;
+}
+.btn-continue:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 14px rgba(133, 77, 14, 0.12);
+  border-color: #fbd38d;
+  background: linear-gradient(135deg, #ffefd1 0%, #ffe2ad 100%);
+}
+.btn-continue:active {
+  transform: translateY(0);
+  box-shadow: 0 4px 10px rgba(133, 77, 14, 0.12) inset;
+}
+.btn-continue:focus {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(251, 191, 36, 0.3);
+}
+.btn-continue:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* Глобальная кнопка «Продолжить» под таблицей очков */
+.continue-global {
+  margin-top: 4px;
+  display: grid;
+  justify-items: end;
+  gap: 4px;
+}
+.btn-continue--global {
+  padding: 10px 14px;
+}
+.continue-hint {
+  color: #64748b;
+  font-size: 0.85rem;
 }
 
 .btn-primary.vote-submit {

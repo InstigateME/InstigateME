@@ -148,13 +148,14 @@ export const useGameStore = defineStore('game', () => {
   const TOTAL_ROUNDS = 16
   const currentRound = ref<number>(1)
   const currentMode = computed<'basic' | 'advanced'>(() => (currentRound.value % 2 === 1 ? 'basic' : 'advanced'))
-  const roundsLeft = computed<number>(() => Math.max(0, TOTAL_ROUNDS - currentRound.value + 1))
+  // Количество оставшихся раундов: без +1, иначе на последнем раунде остается "1" и логика конца игры не срабатывает
+  const roundsLeft = computed<number>(() => Math.max(0, TOTAL_ROUNDS - currentRound.value))
 
   // Следующий раунд: инкрементируем счетчик до 16 и пересчитываем режим
   const advanceRound = () => {
-    if (currentRound.value < TOTAL_ROUNDS) {
-      currentRound.value += 1
-    }
+    // Инкремент номера раунда всегда, а проверку конца игры делаем ниже в переходе фаз
+    currentRound.value += 1
+
     // Обновляем режим согласно чередованию и синхронизируем в state
     gameMode.value = currentMode.value
     gameState.value.gameMode = currentMode.value
@@ -491,9 +492,11 @@ export const useGameStore = defineStore('game', () => {
   }
 
   // Завершить фазу/раунд локально на стороне хоста (используется из сетевого обработчика)
-  const finishRoundHostOnly = () => {
-    // Защита от преждевременного перехода из betting в results до получения всех ставок
-    if (gameMode.value === 'basic' && gamePhase.value === 'betting') {
+  // allowForce — принудительное продвижение (по кнопке «Продолжить» у хоста), игнорирует ожидание всех ставок.
+  const finishRoundHostOnly = (allowForce: boolean = false) => {
+    // Защита от преждевременного перехода из betting в results до получения всех ставок.
+    // Если allowForce === true, разрешаем принудительный переход (по требованию заказчика).
+    if (gameMode.value === 'basic' && gamePhase.value === 'betting' && !allowForce) {
       const playersCount = gameState.value.players.length
       const betsCount = Object.keys(gameState.value.bets || {}).length
       if (betsCount < playersCount) {
@@ -506,16 +509,18 @@ export const useGameStore = defineStore('game', () => {
     if (gameMode.value === 'basic') {
       // Если только что завершилось голосование — переходим к ставкам
       if (gamePhase.value === 'voting') {
+        // Если allowForce === true, хост принудительно завершает голосование и переходит сразу к ставкам
         gamePhase.value = 'betting';
         gameState.value.phase = 'betting';
         broadcastGameState()
-        logAction('basic_voting_to_betting')
+        logAction('basic_voting_to_betting' + (allowForce ? '_forced' : ''))
         debugSnapshot('after_switch_betting')
         return
       }
 
       // Если завершены ставки — считаем очки и показываем результаты
       if (gamePhase.value === 'betting') {
+        // Если allowForce === true, считаем очки и показываем результаты, даже если не все ставки сделаны
         processRound()
         gamePhase.value = 'results'
         gameState.value.phase = 'results'
@@ -540,7 +545,7 @@ export const useGameStore = defineStore('game', () => {
         gameState.value.bets = {}
         gameState.value.roundScores = {}
 
-        // Проверка на конец игры только по лимиту раундов (колоды перерассортировываются при исчерпании)
+        // Проверка на конец игры: когда превысили лимит после инкремента — завершаем
         if (currentRound.value > TOTAL_ROUNDS) {
           gamePhase.value = 'game_over'
           gameState.value.phase = 'game_over'
@@ -611,7 +616,7 @@ export const useGameStore = defineStore('game', () => {
         gameState.value.advancedAnswer = null
         gameState.value.roundScores = {}
 
-        // Завершаем игру только по лимиту раундов (колоды перерассортировываются при исчерпании)
+        // Завершаем игру после превышения лимита раундов
         if (currentRound.value > TOTAL_ROUNDS) {
           gamePhase.value = 'game_over'
           gameState.value.phase = 'game_over'
@@ -1688,25 +1693,31 @@ export const useGameStore = defineStore('game', () => {
       // Разрешаем кнопку только в фазах результатов
       if (gamePhase.value !== 'results' && gamePhase.value !== 'advanced_results') return
 
+      // Поддержка принудительного пропуска от клиента
+      const m = message as Extract<PeerMessage, { type: 'next_round_request' }>
+      const force = Boolean((m as any).payload?.force)
+
       // Проверка консенсуса: все должны завершить свои действия (голос/ставка/догадка)
       const totalPlayers = gameState.value.players.length
 
-      if ((gameState.value.gameMode ?? gameMode.value) === 'basic') {
-        const allVoted = Object.keys(gameState.value.votes || {}).length >= totalPlayers
-        const allBet = Object.keys(gameState.value.bets || {}).length >= totalPlayers
-        const resultsReady = gamePhase.value === 'results' // уже посчитаны очки
-        if (!(allVoted && allBet && resultsReady)) return
-      } else {
-        // advanced
-        const votedCount = Object.keys(gameState.value.votes || {}).length
-        const guessesCount = Object.keys(gameState.value.guesses || {}).filter(pid => pid !== gameState.value.answeringPlayerId).length
-        const requiredGuesses = Math.max(0, totalPlayers - 1)
-        const resultsReady = gamePhase.value === 'advanced_results'
-        if (!(votedCount >= totalPlayers && guessesCount >= requiredGuesses && resultsReady)) return
+      if (!force) {
+        if ((gameState.value.gameMode ?? gameMode.value) === 'basic') {
+          const allVoted = Object.keys(gameState.value.votes || {}).length >= totalPlayers
+          const allBet = Object.keys(gameState.value.bets || {}).length >= totalPlayers
+          const resultsReady = gamePhase.value === 'results' // уже посчитаны очки
+          if (!(allVoted && allBet && resultsReady)) return
+        } else {
+          // advanced
+          const votedCount = Object.keys(gameState.value.votes || {}).length
+          const guessesCount = Object.keys(gameState.value.guesses || {}).filter(pid => pid !== gameState.value.answeringPlayerId).length
+          const requiredGuesses = Math.max(0, totalPlayers - 1)
+          const resultsReady = gamePhase.value === 'advanced_results'
+          if (!(votedCount >= totalPlayers && guessesCount >= requiredGuesses && resultsReady)) return
+        }
       }
 
       // Выполняем переход хода/сброс раундовых данных
-      finishRoundHostOnly()
+      finishRoundHostOnly(force)
     })
 
     // Секретные/обычные голоса
@@ -4786,34 +4797,45 @@ export const useGameStore = defineStore('game', () => {
     (globalThis as any).__migrationState = (globalThis as any).__migrationState || migrationState.value
   } catch {}
 
-  const clientNextRound = () => {
+  const clientNextRound = (force = false) => {
+    // Делаем обработчик идемпотентным: допускаем нажатие "Следующий раунд" как в 'results', так и в 'advanced_results'
+    const isResultsPhase = gamePhase.value === 'results' || gamePhase.value === 'advanced_results'
+
     if (isHost.value) {
-      // Хост выполняет локально ту же логику
-      if (gamePhase.value !== 'results' && gamePhase.value !== 'advanced_results') return
+      // Если мы хост и уже не в фазе результатов, но на клиенте кнопка была нажата повторно —
+      // игнорируем без ошибок (идемпотентность).
+      if (!isResultsPhase) return
 
       const totalPlayers = gameState.value.players.length
 
-      if (gameMode.value === 'basic') {
-        const allVoted = Object.keys(gameState.value.votes || {}).length >= totalPlayers
-        const allBet = Object.keys(gameState.value.bets || {}).length >= totalPlayers
-        const resultsReady = gamePhase.value === 'results'
-        if (!(allVoted && allBet && resultsReady)) return
-      } else {
-        const votedCount = Object.keys(gameState.value.votes || {}).length
-        const guessesCount = Object.keys(gameState.value.guesses || {}).filter(pid => pid !== gameState.value.answeringPlayerId).length
-        const requiredGuesses = Math.max(0, totalPlayers - 1)
-        const resultsReady = gamePhase.value === 'advanced_results'
-        if (!(votedCount >= totalPlayers && guessesCount >= requiredGuesses && resultsReady)) return
+      if (!force) {
+        if (gameMode.value === 'basic') {
+          // В basic кнопка доступна только после подсчета очков (results),
+          // множественные нажатия не должны ломать состояние.
+          const allVoted = Object.keys(gameState.value.votes || {}).length >= totalPlayers
+          const allBet = Object.keys(gameState.value.bets || {}).length >= totalPlayers
+          const resultsReady = gamePhase.value === 'results'
+          if (!(allVoted && allBet && resultsReady)) return
+        } else {
+          // advanced: допускаем, что клиент мог нажать из 'advanced_results'
+          const votedCount = Object.keys(gameState.value.votes || {}).length
+          const guessesCount = Object.keys(gameState.value.guesses || {}).filter(pid => pid !== gameState.value.answeringPlayerId).length
+          const requiredGuesses = Math.max(0, totalPlayers - 1)
+          const resultsReady = gamePhase.value === 'advanced_results'
+          if (!(votedCount >= totalPlayers && guessesCount >= requiredGuesses && resultsReady)) return
+        }
       }
 
-      finishRoundHostOnly()
+      // Принудительный/обычный переход к следующему раунду
+      finishRoundHostOnly(force)
     } else {
-      // Клиент отправляет запрос хосту
+      // Клиент отправляет запрос хосту.
+      // Если хост уже перешел из фаз результатов дальше, повторные клики не вызовут побочных эффектов — хост проигнорирует.
       peerService.sendMessage(
         hostId.value,
         makeMessage(
           'next_round_request',
-          { playerId: myPlayerId.value },
+          { playerId: myPlayerId.value, force } as any,
           { roomId: roomId.value || gameState.value.roomId, fromId: myPlayerId.value, ts: Date.now() }
         )
       )
@@ -5214,6 +5236,11 @@ export const useGameStore = defineStore('game', () => {
     sendGuess: clientSubmitGuess,
     sendWinners: clientSubmitWinners,
     nextRound: clientNextRound,
+    // Принудительное продвижение фазы хостом (skip)
+    forceContinue: (phase?: string) => {
+      // Публичный API с безопасным флагом allowForce = true
+      finishRoundHostOnly(true)
+    },
 
     // Advanced mode direct state helpers (временные, для совместимости)
     submitAnswer: (playerId: string, answer: string) => {
