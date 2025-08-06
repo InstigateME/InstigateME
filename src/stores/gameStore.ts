@@ -180,10 +180,14 @@ export const useGameStore = defineStore('game', () => {
         (currentMode.value === 'basic' ? mod.default.questionsBasic : mod.default.questionsAdvanced) ||
         (mode === 'basic' ? mod.default.questionsBasic : mod.default.questionsAdvanced)
 
-      gameState.value.questionCards =
-        Array.isArray(picked) && picked.length > 0
-          ? picked.slice()
-          : []
+      // Перемешиваем список вопросов один раз при старте игры (Fisher–Yates)
+      const shuffled = Array.isArray(picked) ? picked.slice() : []
+      for (let i = shuffled.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1))
+        ;[shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]]
+      }
+
+      gameState.value.questionCards = shuffled
     } catch {
       // Если не удалось загрузить вопросы — оставляем пустую колоду,
       // чтобы UI явно показал отсутствие данных вместо плейсхолдеров.
