@@ -160,15 +160,35 @@ export const useGameStore = defineStore('game', () => {
     gameState.value.gameMode = currentMode.value
   }
 
-  const initializeGame = (mode: 'basic' | 'advanced' = 'basic') => {
-    gamePhase.value = 'lobby';
-    gameMode.value = mode;
+  // Вопросы импортируются динамически в initializeGame из '@/data/questions.ts'
+
+  const initializeGame = async (mode: 'basic' | 'advanced' = 'basic') => {
+    // Начинаем строго из лобби, но не выставляем gameStarted тут (делаем это в startGame последовательно)
+    gamePhase.value = 'lobby'
+    gameMode.value = mode
 
     // Явно фиксируем режим/фазу и новые поля и в GameState
-    gameState.value.gameMode = mode;
-    gameState.value.phase = 'lobby';
+    gameState.value.gameMode = mode
+    gameState.value.phase = 'lobby'
 
-    gameState.value.questionCards = Array.from({ length: 20 }, (_, i) => `Вопрос-провокация #${i + 1}`)
+    // Загружаем вопросы из TypeScript-модуля с двумя наборами
+    try {
+      const mod = await import('@/data/questions')
+      // Согласно файлу src/data/questions.ts экспорт по умолчанию содержит:
+      // { questionsBasic: whoIsItQuestions, questionsAdvanced: answerItQuestions }
+      const picked =
+        (currentMode.value === 'basic' ? mod.default.questionsBasic : mod.default.questionsAdvanced) ||
+        (mode === 'basic' ? mod.default.questionsBasic : mod.default.questionsAdvanced)
+
+      gameState.value.questionCards =
+        Array.isArray(picked) && picked.length > 0
+          ? picked.slice()
+          : []
+    } catch {
+      // Если не удалось загрузить вопросы — оставляем пустую колоду,
+      // чтобы UI явно показал отсутствие данных вместо плейсхолдеров.
+      gameState.value.questionCards = []
+    }
 
     // Инициализация карт и очков
     gameState.value.scores = {}
@@ -258,19 +278,35 @@ export const useGameStore = defineStore('game', () => {
     // mode: 'basic' | 'advanced'
   const startGame = (mode: 'basic' | 'advanced' = 'basic') => {
     if (!isHost.value) return
-    // Разрешаем старт при >=3 игроках ИЛИ мы находимся в явной фазе лобби
-    const enoughPlayers = gameState.value.players.length >= 3
+
+    // Стартовать можно только из лобби
     const isLobby = (gameState.value.phase ?? 'lobby') === 'lobby'
-    if (!enoughPlayers && !isLobby) return
+    if (!isLobby) return
+
+    // Минимум 2 игрока, чтобы не залипать в ожидании
+    if (gameState.value.players.length < 2) return
 
     // Инициализируем игру и явно дублируем всё в gameState для клиентов
     // Параметр mode больше НЕ фиксирует режим — режим строго задается чередованием по currentRound.
-    initializeGame(mode)
+    // Важно: initializeGame асинхронная — но нам не нужен await, нам нужно последовательное выставление фаз ниже.
+    void initializeGame(mode)
+
+    // Помечаем игру как начатую
     gameState.value.gameStarted = true
+
     // Синхронизируем режим строго из currentMode (источник правды — номер раунда)
     gameMode.value = currentMode.value
     gameState.value.gameMode = currentMode.value
+
+    // Переключаемся в фазу вытягивания вопроса сразу, чтобы клиенты не оставались в 'lobby'
+    gamePhase.value = 'drawing_question'
     gameState.value.phase = 'drawing_question'
+
+    // Инициализируем первый ход на всякий случай (если initializeGame ещё не успела)
+    if (!gameState.value.currentTurnPlayerId) {
+      gameState.value.currentTurn = 0
+      gameState.value.currentTurnPlayerId = gameState.value.players[0]?.id || null
+    }
 
     // Немедленно шлем актуальное состояние всем клиентам
     broadcastGameState()
@@ -502,7 +538,7 @@ export const useGameStore = defineStore('game', () => {
     maxPlayers: 8,
     hostId: '',
     createdAt: 0,
-    questionCards: Array.from({length: 20}, (_, i) => `Вопрос-провокация #${i + 1}`),
+    questionCards: [],
     votingCards: {},
     bettingCards: {},
     currentTurn: 0,
@@ -625,10 +661,10 @@ export const useGameStore = defineStore('game', () => {
   // Также учитываем восстановление состояния: если мы хост и phase === 'lobby', разрешаем старт независимо от gameStarted флага,
   // так как он может быть не синхронизирован в начальный момент.
   const canStartGame = computed(() => {
-    const enoughPlayers = gameState.value.players.length >= 3
+    // Правило: стартовать можно только из лобби и только хосту. Минимум 2 игрока, чтобы не зависать в ожидании.
     const isLobby = (gameState.value.phase ?? 'lobby') === 'lobby'
-    const notStarted = !gameState.value.gameStarted
-    return isHost.value && enoughPlayers && (notStarted || isLobby)
+    const enoughPlayers = gameState.value.players.length >= 2
+    return isHost.value && isLobby && enoughPlayers
   })
 
   const myPlayer = computed(() =>
@@ -1459,6 +1495,14 @@ export const useGameStore = defineStore('game', () => {
       } else {
         console.log('❌ HOST: Game not started, ignoring light_up_request')
       }
+    })
+
+    // Необязательный обработчик ACK'а состояния — убирает шум в логах и может пригодиться для телеметрии готовности клиентов
+    peerService.onMessage('state_ack' as any, (message) => {
+      try {
+        const payload = (message as any).payload || {}
+        console.log('📥 RECEIVED state_ack from client:', payload)
+      } catch {}
     })
 
     peerService.onMessage('request_game_state', (message, conn) => {
