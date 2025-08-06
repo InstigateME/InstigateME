@@ -334,6 +334,7 @@ export const useGameStore = defineStore('game', () => {
   // ВАЖНО: drawCard вызывается на стороне хоста (локально у хоста), но инициироваться может клиентом через draw_question_request.
   // Не полагаемся на myPlayerId на хосте, а проверяем requesterId, который передаём из обработчика сообщения.
   const drawCard = async (requesterId?: string | null) => {
+    logAction('drawCard_request', { requesterId })
     // Действие разрешено только в фазе вытягивания вопроса
     if (gamePhase.value !== 'drawing_question') return null
 
@@ -397,14 +398,52 @@ export const useGameStore = defineStore('game', () => {
 
   // Игрок делает голос: votesArr — массив из двух id выбранных игроков
   const submitVote = (voterId: string, votesArr: string[]) => {
+    logAction('submit_vote', { voterId, votes: votesArr })
     if (gamePhase.value !== 'voting' && gamePhase.value !== 'secret_voting') return
     if (!gameState.value.votes) gameState.value.votes = {}
     gameState.value.votes[voterId] = votesArr
     broadcastGameState()
+
+    // Автопереход фазы для advanced: когда ВСЕ активные игроки проголосовали, двигаем secret_voting -> answering
+    if (gameMode.value === 'advanced' && gamePhase.value === 'secret_voting' && isHost.value) {
+      debugSnapshot('before_secret_to_answering_check')
+      // Количество активных игроков (исключаем отсутствующих)
+      const activePlayers = (gameState.value.players || []).filter(p => {
+        const st = gameState.value.presence?.[p.id]
+        return st !== 'absent'
+      })
+      const requiredVotes = activePlayers.length
+      const receivedVotes = Object.keys(gameState.value.votes || {}).filter(pid =>
+        activePlayers.some(p => p.id === pid)
+      ).length
+
+      if (receivedVotes >= requiredVotes && requiredVotes > 0) {
+        // Подсчёт голосов и определение лидера
+        const votesObj = gameState.value.votes ?? {}
+        const voteCounts: Record<string, number> = {}
+        Object.values(votesObj).forEach((voteArr: string[]) => {
+          voteArr.forEach((targetId) => {
+            voteCounts[targetId] = (voteCounts[targetId] || 0) + 1
+          })
+        })
+        gameState.value.voteCounts = voteCounts
+
+        const maxVotes = Math.max(0, ...Object.values(voteCounts))
+        const leaders = Object.entries(voteCounts)
+          .filter(([_, count]) => count === maxVotes && maxVotes > 0)
+          .map(([playerId]) => playerId)
+
+        gameState.value.answeringPlayerId = leaders[0] || null
+        gamePhase.value = 'answering'
+        gameState.value.phase = 'answering'
+        broadcastGameState()
+      }
+    }
   }
 
   // Игрок делает ставку: bet — '0' | '±' | '+'
   const submitBet = (playerId: string, bet: '0' | '±' | '+') => {
+    logAction('submit_bet', { playerId, bet })
     if (gamePhase.value !== 'betting') return
     if (!gameState.value.bets) gameState.value.bets = {}
 
@@ -420,6 +459,8 @@ export const useGameStore = defineStore('game', () => {
     const betsCount = Object.keys(gameState.value.bets).length
 
     if (betsCount >= playersCount) {
+      logAction('bets_completed_process_round', { betsCount, playersCount })
+      debugSnapshot('before_results_after_bets')
       processRound()
       gamePhase.value = 'results'
       gameState.value.phase = 'results'
@@ -446,6 +487,8 @@ export const useGameStore = defineStore('game', () => {
         gamePhase.value = 'betting';
         gameState.value.phase = 'betting';
         broadcastGameState()
+        logAction('basic_voting_to_betting')
+        debugSnapshot('after_switch_betting')
         return
       }
 
@@ -498,30 +541,15 @@ export const useGameStore = defineStore('game', () => {
       }
     } else {
       // advanced режим
+      // Переход из secret_voting в answering выполняется строго в submitVote при завершении голосования,
+      // чтобы избежать двойных переходов/гонок. Здесь ничего не делаем для secret_voting.
       if (gamePhase.value === 'secret_voting') {
-        // Определяем отвечающего по голосам
-        const votesObj = gameState.value.votes ?? {}
-        const voteCounts: Record<string, number> = {}
-        Object.values(votesObj).forEach((voteArr: string[]) => {
-          voteArr.forEach((targetId) => {
-            voteCounts[targetId] = (voteCounts[targetId] || 0) + 1
-          })
-        })
-        gameState.value.voteCounts = voteCounts
-
-        const maxVotes = Math.max(0, ...Object.values(voteCounts))
-        const leaders = Object.entries(voteCounts)
-          .filter(([_, count]) => count === maxVotes && maxVotes > 0)
-          .map(([playerId]) => playerId)
-
-        gameState.value.answeringPlayerId = leaders[0] || null
-        gamePhase.value = 'answering'
-        gameState.value.phase = 'answering'
-        broadcastGameState()
         return
       }
 
       if (gamePhase.value === 'answering') {
+        logAction('advanced_answering_to_guessing')
+        debugSnapshot('after_switch_guessing')
         // Получили ответ — переходим к угадыванию
         gamePhase.value = 'guessing'
         gameState.value.phase = 'guessing'
@@ -530,6 +558,8 @@ export const useGameStore = defineStore('game', () => {
       }
 
       if (gamePhase.value === 'guessing') {
+        logAction('advanced_guessing_to_selecting_winners')
+        debugSnapshot('after_switch_selecting_winners')
         // После получения всех догадок переходим к фазе выбора победителей автором правильного ответа
         // Выбирает игрок, писавший правильный ответ (answeringPlayerId).
         gamePhase.value = 'selecting_winners'
@@ -1708,7 +1738,15 @@ export const useGameStore = defineStore('game', () => {
 
           broadcastGameState()
         } else {
-          // advanced: уже есть voteCounts — выбираем отвечающего и переходим к answering
+          // advanced: переход из secret_voting в answering выполняем ОДИН РАЗ по факту завершения голосования
+          // Защита от двойного перехода/гонок
+          if (gamePhase.value !== 'secret_voting') {
+            return
+          }
+          if (gameState.value.answeringPlayerId) {
+            return
+          }
+
           const maxVotes = Math.max(0, ...Object.values(voteCounts))
           const leaders = Object.entries(voteCounts)
             .filter(([_, c]) => c === maxVotes && maxVotes > 0)
@@ -4475,6 +4513,84 @@ export const useGameStore = defineStore('game', () => {
     })
   } catch {}
 
+  // ===== DEBUG: Снимок состояния и журнал действий =====
+  /**
+   * Выводит в консоль компактный снимок состояния текущего игрока и игры.
+   * Показывает: мой ник/ID/роль (хост/клиент), текущий режим/фазу, комнату, хоста,
+   * номер раунда и счетчик голосов/ставок. Удобно для диагностики зависаний.
+   */
+  function debugSnapshot(reason: string) {
+    if (!isDebug.value) return
+    try {
+      const me = myPlayer.value
+      const activePlayers = (gameState.value.players || []).filter(p => gameState.value.presence?.[p.id] !== 'absent')
+      const snapshot = {
+        reason,
+        now: new Date().toISOString(),
+        roomId: roomId.value || gameState.value.roomId,
+        hostId: hostId.value || gameState.value.hostId,
+        isHost: isHost.value,
+        my: {
+          id: myPlayerId.value,
+          nickname: me?.nickname,
+          color: me?.color
+        },
+        game: {
+          mode: gameState.value.gameMode ?? gameMode.value,
+          phase: gameState.value.phase ?? gamePhase.value,
+          round: currentRound.value,
+          playersTotal: gameState.value.players.length,
+          playersActive: activePlayers.length,
+          currentTurn: gameState.value.currentTurn,
+          currentTurnPlayerId: gameState.value.currentTurnPlayerId,
+          currentQuestion: gameState.value.currentQuestion
+        },
+        votes: {
+          votedCount: Object.keys(gameState.value.votes || {}).length,
+          voteCounts: gameState.value.voteCounts || {}
+        },
+        bets: {
+          betsCount: Object.keys(gameState.value.bets || {}).length
+        },
+        scores: gameState.value.scores || {}
+      }
+      // Группируем лог для удобства чтения
+      // eslint-disable-next-line no-console
+      console.groupCollapsed('🧾 Снимок состояния')
+      // eslint-disable-next-line no-console
+      console.log(JSON.stringify(snapshot, null, 2))
+      // eslint-disable-next-line no-console
+      console.groupEnd()
+    } catch {}
+  }
+
+  // Простой журнал действий для ключевых переходов/событий
+  function logAction(event: string, payload?: Record<string, unknown>) {
+    if (!isDebug.value) return
+    try {
+      const entry = {
+        t: new Date().toISOString(),
+        event,
+        me: { id: myPlayerId.value, isHost: isHost.value },
+        phase: gameState.value.phase ?? gamePhase.value,
+        mode: gameState.value.gameMode ?? gameMode.value,
+        round: currentRound.value,
+        ...((payload || {}))
+      }
+      // eslint-disable-next-line no-console
+      console.log('🪵 [Action]', entry)
+    } catch {}
+  }
+
+  // Автоматический снимок состояния при ключевых изменениях — помогает ловить «залипы на 3-м раунде»
+  watch(
+    () => [gameState.value.phase, gameState.value.gameMode, currentRound.value, Object.keys(gameState.value.votes || {}).length, Object.keys(gameState.value.bets || {}).length],
+    ([phase, mode, round, votedCount, betsCount]) => {
+      debugSnapshot(`watch:phase=${phase};mode=${mode};round=${round};voted=${votedCount};bets=${betsCount}`)
+    },
+    { deep: false }
+  )
+
   // Автоматическое сохранение сессии при изменениях
   watch(
     [gameState, myPlayerId, myNickname, isHost, hostId, roomId, connectionStatus],
@@ -4549,6 +4665,8 @@ export const useGameStore = defineStore('game', () => {
         gamePhase.value = 'guessing'
         gameState.value.phase = 'guessing'
         broadcastGameState()
+        logAction('advanced_answer_submitted_switch_to_guessing', { currentQuestion: gameState.value.currentQuestion })
+        debugSnapshot('after_answer_to_guessing')
       }
     } else {
       peerService.sendMessage(
@@ -4567,6 +4685,8 @@ export const useGameStore = defineStore('game', () => {
       if (!gameState.value.guesses) gameState.value.guesses = {}
       gameState.value.guesses[myPlayerId.value] = guess
       broadcastGameState()
+      logAction('advanced_guess_submitted', { guessFor: myPlayerId.value })
+      debugSnapshot('after_guess_submit')
     } else {
       peerService.sendMessage(
         hostId.value,

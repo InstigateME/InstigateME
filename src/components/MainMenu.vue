@@ -59,6 +59,7 @@
 
         <button
           class="btn btn-secondary btn-large"
+          style="margin-bottom: 12px;"
           @click="joinRoom"
           :disabled="!gameStore.myNickname.trim() || !joinRoomId.trim() || gameStore.connectionStatus === 'connecting'"
         >
@@ -66,7 +67,6 @@
         </button>
         <button
           class="btn btn-secondary btn-medium"
-          style="margin-bottom: 12px;"
           @click="pasteFromClipboard"
           :disabled="gameStore.connectionStatus === 'connecting'"
         >

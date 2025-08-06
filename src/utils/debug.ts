@@ -21,6 +21,18 @@ function normalize(val: unknown): string {
  * Это обеспечивает совместимость, если флаг был установлен вручную: localStorage.setItem('__app_debug','1')
  */
 export function isDebugEnabled(): boolean {
+  // В localhost всегда включаем debug независимо от флага
+  try {
+    if (typeof window !== 'undefined') {
+      const host = window.location?.hostname || ''
+      if (host === 'localhost' || host === '127.0.0.1' || host === '::1') {
+        return true
+      }
+    }
+  } catch {
+    // ignore and fallback to flag checks
+  }
+
   // 1) Попытка прочитать через storageSafe с пустым namespace (сформируется "__app_ns::__app_debug")
   //    Если проект не использует этот формат для отладочного ключа, fallback ниже покроет случай «сырое» значение.
   const prefixedKey = (storageSafe as any).buildKey?.('', GLOBAL_DEBUG_KEY) as string | undefined

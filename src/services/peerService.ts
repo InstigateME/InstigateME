@@ -79,8 +79,16 @@ class PeerService {
         console.log('🔄 Attempting to restore host with saved ID:', targetPeerId)
         this.peer = new Peer(targetPeerId)
       } else {
-        console.log('🆕 Creating new host with random ID')
-        this.peer = new Peer()
+        // Генерируем ДЕТЕРМИНИРОВАННЫЙ ID на основе roomId, чтобы клиенты могли
+        // переподключаться к тому же ID после реконнекта (исключаем случайные UUID).
+        const deterministicId = roomId ? `room-${roomId}` : undefined
+        if (deterministicId) {
+          console.log('🆕 Creating new host with deterministic ID:', deterministicId)
+          this.peer = new Peer(deterministicId)
+        } else {
+          console.log('🆕 Creating new host with random ID (no roomId provided)')
+          this.peer = new Peer()
+        }
       }
       
       this.peer.on('open', (id) => {
@@ -106,35 +114,33 @@ class PeerService {
       this.peer.on('error', (error) => {
         if (this.isShuttingDown) {
           // Подавляем ошибки в процессе штатного завершения
-          console.log('Peer error suppressed during shutdown:', error?.type || error)
+          console.log('Peer error suppressed during shutdown:', (error as any)?.type || error)
           return
         }
         console.error('Peer error:', error)
         
-        // Если не удалось восстановить сохраненный ID - создаем новый
-        if (targetPeerId && (error as any)?.type === 'unavailable-id') {
-          console.log('❌ Saved ID unavailable, creating new host and clearing storageSafe...')
+        // Если не удалось восстановить/занять ID (занят), пробуем пересоздать Peer С ТЕМ ЖЕ deterministic ID
+        const errType = (error as any)?.type
+        if ((errType === 'unavailable-id' || errType === 'server-error' || errType === 'network') && roomId) {
+          console.log('⚠️ Peer error type:', errType, '— attempting recreate with the SAME deterministic ID')
+          try {
+            // Пробуем мягко отключить текущий экземпляр перед пересозданием
+            try { this.peer?.disconnect() } catch {}
+            try { this.peer?.destroy() } catch {}
+          } catch {}
           
-          // Очищаем устаревший ID
-          if (roomId) {
-            this.clearHostPeerId(roomId)
-          }
-          
-          this.peer = new Peer()
+          const deterministicId = `room-${roomId}`
+          this.peer = new Peer(deterministicId)
           
           this.peer.on('open', (newId) => {
-            console.log('🆕 Host created with new ID after restore failure:', newId)
-            
-            // Сохраняем новый ID
-            if (roomId) {
-              this.saveHostPeerId(roomId, newId)
-              console.log('💾 NEW host ID saved after fallback:', newId)
-            }
-            
+            console.log('🔁 Host recreated with the SAME deterministic ID:', newId)
+            // Обновляем сохранённый ID для комнаты
+            this.saveHostPeerId(roomId, newId)
             resolve(newId)
           })
           
           this.peer.on('error', (newError) => {
+            console.error('❌ Failed to recreate Peer with deterministic ID:', (newError as any)?.type || newError)
             reject(newError)
           })
         } else {
@@ -156,6 +162,7 @@ class PeerService {
         setTimeout(() => {
           if (this.peer && !this.peer.open && !this.isShuttingDown) {
             console.log('🔄 Reconnecting host to signaling server...')
+            // ВАЖНО: PeerJS сохраняет исходный id, peer.reconnect() попытается восстановить тот же id.
             this.peer.reconnect()
           }
         }, 1000)
@@ -422,6 +429,8 @@ class PeerService {
     this.isHostRole = true
     if (roomId) {
       this.currentRoomId = roomId
+      // Гарантируем, что сохраняем стабильный hostId для комнаты
+      try { this.saveHostPeerId(roomId, hostId) } catch {}
     }
     this.startHeartbeat(hostId)
   }
@@ -511,6 +520,27 @@ class PeerService {
     
     // Удаляем соединение с отключенным хостом
     this.connections.delete(hostId)
+    
+    // Попытка мягкого переподключения к ТОМУ ЖЕ хосту в пределах grace period клиента
+    // Если у клиента есть Peer и он открыт — пробуем восстановить соединение к тому же hostId.
+    const peerInst = this.getPeer()
+    if (peerInst && peerInst.open) {
+      try {
+        const conn = peerInst.connect(hostId)
+        const timeout = setTimeout(() => {
+          try { conn.close() } catch {}
+        }, 2000)
+        conn.on('open', () => {
+          clearTimeout(timeout)
+          console.log('🔁 Client reconnected to the same host after heartbeat timeout:', hostId)
+          this.connections.set(hostId, conn)
+          this.setupConnectionHandlers(conn)
+        })
+        conn.on('error', () => {
+          clearTimeout(timeout)
+        })
+      } catch {}
+    }
     
     // Вызываем callback для начала процедуры выборов
     if (this.onHostDisconnectedCallback) {

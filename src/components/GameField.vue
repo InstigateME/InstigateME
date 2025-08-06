@@ -67,8 +67,17 @@
       <!-- Голосование (basic/advanced) -->
       <div v-else-if="phase === 'voting' || phase === 'secret_voting'"
            class="phase-block voting-block">
-        <!-- Глобальная индикация переподключения -->
-        <div v-if="gameStore.connectionStatus !== 'connected'" class="reconnect-info" style="margin-bottom:10px">
+        <!-- Глобальный popover статуса переподключения -->
+        <div
+          v-if="gameStore.uiConnecting"
+          class="global-reconnect-popover"
+          role="status"
+          aria-live="polite"
+        >
+          <div class="popover-content">
+            <span class="spinner" aria-hidden="true"></span>
+            <span class="text">Восстанавливаем соединение…</span>
+          </div>
         </div>
         <!-- Показываем карточку вопроса над голосованием, чтобы она не исчезала после вытягивания -->
         <div class="question-card question-card--large" v-if="currentQuestion">{{
@@ -2283,13 +2292,39 @@ watch([() => gameStore.gameState.gameStarted, myId], ([started, id]: [boolean | 
     font-size: 0.8rem;
   }
 }
-.reconnect-info {
-  background: #fff3cd;
-  color: #7a5d00;
-  border: 1px solid #ffe08a;
-  padding: 10px 12px;
-  border-radius: 10px;
-  font-weight: 600;
+/* Глобальный popover переподключения */
+.global-reconnect-popover {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 2000;
+  background: #111827ee;
+  color: #f9fafb;
+  border: 1px solid #334155;
+  border-radius: 12px;
+  box-shadow: 0 12px 30px rgba(0,0,0,0.25);
+  padding: 10px 14px;
+}
+.global-reconnect-popover .popover-content {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+.global-reconnect-popover .spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid #93c5fd;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+}
+.global-reconnect-popover .text {
+  font-weight: 700;
+  font-size: 0.95rem;
+  letter-spacing: .2px;
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
 
 /* остальной CSS ниже */
