@@ -1,5 +1,6 @@
 import {ref, computed, watch} from 'vue'
 import {defineStore} from 'pinia'
+import { storageSafe } from '@/utils/storageSafe'
 import type {
   Player,
   GameState,
@@ -31,14 +32,11 @@ import {
 
 /**
  * Персистентность и синхронизация
- * - SESSION_STORAGE_KEY: локальная сессия игрока
- * - HOST_STATE_STORAGE_KEY: снапшот состояния игры от хоста
+ * - Pinia persist: атомарные поля (см. persist.paths ниже)
+ * - storageSafe (namespace 'game'): TTL-снапшот hostGameStateSnapshot, стабильный roomId
  */
-const GAME_PREFIX = '__game_'
-const SESSION_STORAGE_KEY = `${GAME_PREFIX}sessionData`
-const HOST_STATE_STORAGE_KEY = `${GAME_PREFIX}hostGameStateSnapshot`
-const ROOM_ID_STORAGE_KEY = `${GAME_PREFIX}roomId`
 const SESSION_TIMEOUT = 30 * 60 * 1000 // 30 минут
+const HOST_SNAPSHOT_TTL = 15 * 60 * 1000 // 15 минут
 
 // ---------- Request guards & standardized errors ----------
 type RequestKey = 'createRoom' | 'joinRoom' | 'restoreSession'
@@ -115,29 +113,23 @@ interface SessionData extends ExtendedSessionData {
 }
 
 export const useGameStore = defineStore('game', () => {
-  // ---------- LocalStorage utils with game prefix ----------
-  const isGameKey = (key: string) => key.startsWith(GAME_PREFIX)
-  const setGameItem = (key: string, value: string) => {
-    try { localStorage.setItem(`${GAME_PREFIX}${key}`, value) } catch {}
+  // ---------- StorageSafe wrappers ----------
+  // Очистка namespace 'game'
+  const removeGameItemsByPrefix = () => {
+    try { storageSafe.clearNamespace('game') } catch {}
   }
-  const getGameItem = (key: string): string | null => {
-    try { return localStorage.getItem(`${GAME_PREFIX}${key}`) } catch { return null }
+  // Никнейм хранится БЕЗ префикса по требованию — предполагаем отдельные хелперы не используются.
+  // Сохраняем ник напрямую в non-prefixed ключ (совместимость с требованиями).
+  const NICK_STORAGE_KEY = 'nickname'
+  const setNickname = (nick: string) => {
+    try { localStorage.setItem(NICK_STORAGE_KEY, nick) } catch {}
   }
-  const removeGameItemsByPrefix = (prefix: string = GAME_PREFIX) => {
-    try {
-      const toRemove: string[] = []
-      for (let i = 0; i < localStorage.length; i++) {
-        const k = localStorage.key(i)
-        if (k && k.startsWith(prefix)) toRemove.push(k)
-      }
-      toRemove.forEach(k => localStorage.removeItem(k))
-    } catch {}
+  const getNickname = (): string | null => {
+    try { return localStorage.getItem(NICK_STORAGE_KEY) } catch { return null }
   }
-  // Никнейм хранится БЕЗ префикса по требованию
-  const NICKNAME_STORAGE_KEY = 'savedNickname'
-  const setNickname = (nick: string) => { try { localStorage.setItem(NICKNAME_STORAGE_KEY, nick) } catch {} }
-  const getNickname = (): string | null => { try { return localStorage.getItem(NICKNAME_STORAGE_KEY) } catch { return null } }
-  const clearNickname = () => { try { localStorage.removeItem(NICKNAME_STORAGE_KEY) } catch {} }
+  const clearNickname = () => {
+    try { localStorage.removeItem(NICK_STORAGE_KEY) } catch {}
+  }
 
   // Game mechanics for "Провокатор"
   // Структура голосов: { [voterId]: [targetId, targetId] }
@@ -619,6 +611,8 @@ export const useGameStore = defineStore('game', () => {
   const roomId = ref<string>('')
   const connectionStatus = ref<'disconnected' | 'connecting' | 'connected'>('disconnected')
   const restorationState = ref<'idle' | 'discovering' | 'restoring'>('idle')
+  // Метка последней успешной сессии/подключения
+  const sessionTimestamp = ref<number | null>(null)
 
   // Computed
   // Кнопка "Начать" должна быть активна для хоста при >=3 игроках и если игра еще не запущена
@@ -675,23 +669,15 @@ export const useGameStore = defineStore('game', () => {
     return `${adjective}-${noun}-${numbers}`
   }
 
-  // Устойчивое хранение roomId между перезагрузками хоста
+  // Устойчивое хранение roomId между перезагрузками хоста (storageSafe, namespace 'game')
   const savePersistentRoomId = (rid: string) => {
-    try {
-      localStorage.setItem(ROOM_ID_STORAGE_KEY, rid)
-    } catch {}
+    try { storageSafe.nsSet('game', 'roomIdStable', rid) } catch {}
   }
   const loadPersistentRoomId = (): string | null => {
-    try {
-      return localStorage.getItem(ROOM_ID_STORAGE_KEY)
-    } catch {
-      return null
-    }
+    try { return storageSafe.nsGet<string>('game', 'roomIdStable') } catch { return null }
   }
   const clearPersistentRoomId = () => {
-    try {
-      localStorage.removeItem(ROOM_ID_STORAGE_KEY)
-    } catch {}
+    try { storageSafe.nsRemove('game', 'roomIdStable') } catch {}
   }
 
   // Генерация токена безопасности
@@ -720,7 +706,7 @@ export const useGameStore = defineStore('game', () => {
       connectionStatus.value = 'connecting'
 
       // Перед созданием комнаты: очистить все старые игровые записи
-      removeGameItemsByPrefix(GAME_PREFIX)
+      removeGameItemsByPrefix()
       // Ник сохраняем без префикса
       setNickname(nickname)
 
@@ -830,14 +816,11 @@ export const useGameStore = defineStore('game', () => {
       // Сохраняем roomId для последующих перезагрузок
       savePersistentRoomId(targetRoomId)
 
-      // Сохраняем свежие игровые записи
-      try {
-        localStorage.setItem(`${GAME_PREFIX}isHost`, JSON.stringify(true))
-        localStorage.setItem(`${GAME_PREFIX}hostId`, restoredPeerId)
-        localStorage.setItem(`${GAME_PREFIX}roomId`, targetRoomId)
-      } catch {}
+      // Сохранение атомарных полей выполняет Pinia persist; устойчивый roomId уже сохранен
+      try {} catch {}
 
       console.log('🏁 Host initialization completed with ID:', restoredPeerId)
+      sessionTimestamp.value = Date.now()
       endRequestSuccess('createRoom', ridGuard)
       return restoredPeerId
 
@@ -855,7 +838,7 @@ export const useGameStore = defineStore('game', () => {
       connectionStatus.value = 'connecting'
 
       // Перед входом в комнату: очистить все старые игровые записи
-      removeGameItemsByPrefix(GAME_PREFIX)
+      removeGameItemsByPrefix()
       // Ник сохраняем без префикса
       setNickname(nickname)
 
@@ -917,20 +900,15 @@ export const useGameStore = defineStore('game', () => {
       // 8) Теперь считаем соединение установленным
       connectionStatus.value = 'connected'
 
-      // Сохраняем свежие игровые записи
-      try {
-        localStorage.setItem(`${GAME_PREFIX}isHost`, JSON.stringify(false))
-        localStorage.setItem(`${GAME_PREFIX}hostId`, targetHostId)
-        // roomId придёт из состояния; если уже известен — сохраним
-        const rid = roomId.value || gameState.value.roomId
-        if (rid) localStorage.setItem(`${GAME_PREFIX}roomId`, rid)
-      } catch {}
+      // Сохранение атомарных полей выполняет Pinia persist
+      try {} catch {}
     } catch (error) {
       connectionStatus.value = 'disconnected'
       endRequestError('joinRoom', ridGuard, normalizeError(error, 'join_room_failed'))
       throw error
     }
     // success branch
+    sessionTimestamp.value = Date.now()
     endRequestSuccess('joinRoom', ridGuard)
   }
 
@@ -1906,20 +1884,16 @@ export const useGameStore = defineStore('game', () => {
         console.log('🆗 CLIENT accepted legacy game_state_update as initial snapshot (timeout fallback)')
       }
 
-      // Немедленно кешируем снапшот состояния, полученный от хоста,
-      // чтобы после перезагрузки не «проваливаться» в лобби.
+      // Немедленно кешируем снапшот состояния, полученный от хоста, с TTL
       try {
-        localStorage.setItem(HOST_STATE_STORAGE_KEY, JSON.stringify({
-          ts: Date.now(),
-          state: newState
-        }))
+        storageSafe.setWithTTL('game', 'hostGameStateSnapshot', { ts: Date.now(), state: newState }, HOST_SNAPSHOT_TTL)
       } catch (e) {
         console.warn('Failed to cache host snapshot on client', e)
       }
-      // Обновим roomId в игровых записях
+      // Обновим устойчивый roomId
       try {
         if (newState?.roomId) {
-          localStorage.setItem(`${GAME_PREFIX}roomId`, newState.roomId)
+          savePersistentRoomId(newState.roomId)
         }
       } catch {}
 
@@ -2016,12 +1990,9 @@ export const useGameStore = defineStore('game', () => {
       // Всегда шлем свежую копию, чтобы избежать мутаций по ссылке у клиентов
       const snapshot = { ...gameState.value }
 
-      // Пишем снапшот хоста в localStorage, чтобы клиенты могли «якориться» после перезагрузки
+      // Пишем снапшот хоста в storageSafe с TTL, чтобы клиенты могли «якориться» после перезагрузки
       try {
-        localStorage.setItem(HOST_STATE_STORAGE_KEY, JSON.stringify({
-          ts: Date.now(),
-          state: snapshot
-        }))
+        storageSafe.setWithTTL('game', 'hostGameStateSnapshot', { ts: Date.now(), state: snapshot }, HOST_SNAPSHOT_TTL)
       } catch (e) {
         console.warn('Failed to persist host snapshot', e)
       }
@@ -3246,122 +3217,66 @@ export const useGameStore = defineStore('game', () => {
 
 
   // Сохранение расширенной сессии в localStorage
+  // Новая схема: отказ от отдельного SESSION_STORAGE_KEY.
+  // Атомарные поля будут сохраняться через Pinia persist; расширенную сессию больше не пишем.
   const saveSession = () => {
-    if (!myPlayerId.value || connectionStatus.value === 'disconnected') {
-      return
-    }
-
-    const sessionData: SessionData = {
-      gameState: gameState.value,
-      myPlayerId: myPlayerId.value,
-      myNickname: myNickname.value,
-      isHost: isHost.value,
-      hostId: hostId.value,
-      roomId: roomId.value,
-      timestamp: Date.now(),
-      meshTopology: peerService.getAllKnownPeers(),
-      lastHeartbeat: Date.now(),
-      networkVersion: gameState.value.createdAt // Используем время создания игры как версию сети
-    }
-
-    localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(sessionData))
-    console.log('Extended session saved:', sessionData)
+    return
   }
 
   // Загрузка сессии из localStorage
+  // Сессии больше не читаем из отдельного ключа; опираемся на гидратацию Pinia и anchorSnapshot.
   const loadSession = (): SessionData | null => {
-    try {
-      const savedData = localStorage.getItem(SESSION_STORAGE_KEY)
-      if (!savedData) return null
-
-      const sessionData: SessionData = JSON.parse(savedData)
-
-      // Проверяем, не истекла ли сессия
-      const now = Date.now()
-      if (now - sessionData.timestamp > SESSION_TIMEOUT) {
-        console.log('Session expired, removing from storage')
-        localStorage.removeItem(SESSION_STORAGE_KEY)
-        return null
-      }
-
-      console.log('Session loaded:', sessionData)
-      return sessionData
-    } catch (error) {
-      console.error('Failed to load session:', error)
-      localStorage.removeItem(SESSION_STORAGE_KEY)
-      return null
-    }
+    return null
   }
 
   // Удаление сессии
   const clearSession = () => {
-    localStorage.removeItem(SESSION_STORAGE_KEY)
-    console.log('Session cleared')
+    // no-op: отдельного ключа сессии больше нет
+    console.log('Session cleared (no-op)')
   }
 
   // Универсальное восстановление состояния из сохраненной сессии
   const restoreSession = async (): Promise<boolean> => {
     const ridGuard = startRequest('restoreSession')
-    const sessionData = loadSession()
-    if (!sessionData) {
-      endRequestError('restoreSession', ridGuard, normalizeError('No session', 'restore_no_session'))
-      return false
+
+    // Читаем якорный снапшот (если есть и свежий)
+    let anchorState: GameState | null = null
+    try {
+      const cached = storageSafe.getWithTTL<{ ts: number, state: GameState }>('game', 'hostGameStateSnapshot', null)
+      if (cached?.state) {
+        anchorState = cached.state
+        console.log('Using cached host snapshot as anchor for restore')
+      }
+    } catch (e) {
+      console.warn('Failed to read host snapshot from storageSafe', e)
     }
 
+    // Если ни снапшота, ни атомарных полей — это не фатально, продолжим c текущим state (иниц. пустой)
     try {
       console.log('Attempting to restore session...')
       restorationState.value = 'discovering'
       connectionStatus.value = 'connecting'
 
-      // Берем максимально свежий «якорь»: снапшот от хоста (если есть), иначе из своей сессии
-      let anchorState = sessionData.gameState
-      try {
-        const hostSnap = localStorage.getItem(HOST_STATE_STORAGE_KEY)
-        if (hostSnap) {
-          const parsed = JSON.parse(hostSnap) as { ts: number, state: GameState }
-          // Если room совпадает и снапшот свежий — используем его
-          if (parsed?.state?.roomId && parsed.state.roomId === sessionData.roomId) {
-            anchorState = parsed.state as any
-            console.log('Using cached host snapshot as anchor for restore')
-          }
+      // Если есть якорь – применим его как стартовое состояние
+      if (anchorState) {
+        gameState.value = { ...anchorState }
+        if ((gameState.value.phase ?? 'lobby') !== 'lobby') {
+          gameState.value.gameStarted = true
         }
-      } catch (e) {
-        console.warn('Failed to read host snapshot', e)
       }
 
-      // Восстанавливаем локальное состояние из «якоря»
-      gameState.value = { ...anchorState }
-      // КРИТИЧНО: если фаза не 'lobby', считаем игру начатой
-      if ((gameState.value.phase ?? 'lobby') !== 'lobby') {
-        gameState.value.gameStarted = true
-      }
+      // Универсальный discovery: используем атомарные поля из стора (гидратированы плагином)
+      const sessionDataLike = {
+        myPlayerId: myPlayerId.value,
+        myNickname: myNickname.value,
+        isHost: isHost.value,
+        hostId: hostId.value,
+        roomId: roomId.value,
+        gameState: gameState.value
+      } as SessionData
 
-      myPlayerId.value = sessionData.myPlayerId
-      myNickname.value = sessionData.myNickname
-      roomId.value = sessionData.roomId
-
-      // Защита от рассинхронизации роли/hostId после reload
-      // Если в sessionData.isHost === false, но в anchorState.hostId не равен myPlayerId, принудительно выставляем клиентскую роль
-      if (!sessionData.isHost && gameState.value.hostId && gameState.value.hostId !== myPlayerId.value) {
-        isHost.value = false
-        hostId.value = gameState.value.hostId
-      }
-
-      // Если в sessionData.isHost === true, но есть противоречие (hostId в состоянии другой),
-      // не принимаем роль хоста, пока не подтвердим через discovery
-      if (sessionData.isHost && gameState.value.hostId && gameState.value.hostId !== myPlayerId.value) {
-        console.log('⚠️ Detected hostId mismatch on reload, downgrading to client until discovery confirms host role', {
-          storedIsHost: sessionData.isHost,
-          anchorHostId: gameState.value.hostId,
-          myId: myPlayerId.value
-        })
-        isHost.value = false
-        hostId.value = gameState.value.hostId
-      }
-
-      // УНИВЕРСАЛЬНАЯ ЛОГИКА: всегда начинаем с discovery
       console.log('Starting universal host discovery...')
-      const currentHost = await universalHostDiscovery(sessionData)
+      const currentHost = await universalHostDiscovery(sessionDataLike)
 
       restorationState.value = 'restoring'
 
@@ -3374,26 +3289,27 @@ export const useGameStore = defineStore('game', () => {
       } else {
         // Если discovery никого не нашёл, проверим: действительно ли мы были хостом
         // Хост подтверждён, только если sessionData.isHost === true И anchorState.hostId === myPlayerId
-        const canBeHost = !!(sessionData.isHost && (gameState.value.hostId === myPlayerId.value || !gameState.value.hostId))
+        const canBeHost = !!(isHost.value && (gameState.value.hostId === myPlayerId.value || !gameState.value.hostId))
         if (canBeHost) {
-          console.log('No active host found, becoming host (confirmed by session and anchor)...')
+          console.log('No active host found, becoming host (confirmed by anchor/pinia)...')
           isHost.value = true
           await restoreAsHost()
         } else {
-          console.log('No active host found and session not authoritative, forcing client mode and retrying discovery shortly...')
+          console.log('No active host found and no authority to self-promote, retrying quick discovery...')
           isHost.value = false
-          // Сбрасываем hostId в неизвестный до уточнения
           hostId.value = ''
-          // Повторный короткий discovery (быстрая проверка)
           const retryHost = await universalHostDiscovery({
-            ...sessionData,
-            hostId: sessionData.hostId // оставляем прошлый hostId для первой попытки
-          })
+            myPlayerId: myPlayerId.value,
+            myNickname: myNickname.value,
+            isHost: false,
+            hostId: hostId.value,
+            roomId: roomId.value,
+            gameState: gameState.value
+          } as any)
           if (retryHost) {
             hostId.value = retryHost.currentHostId
             await restoreAsClient(retryHost.currentHostId)
           } else {
-            // Как крайний случай — остаёмся отключенными, UI предложит переподключиться
             connectionStatus.value = 'disconnected'
             restorationState.value = 'idle'
             console.log('Staying disconnected: no authoritative host and not confirmed host self-promotion')
@@ -3405,6 +3321,7 @@ export const useGameStore = defineStore('game', () => {
       restorationState.value = 'idle'
       connectionStatus.value = 'connected'
       console.log('Session successfully restored')
+      sessionTimestamp.value = Date.now()
       endRequestSuccess('restoreSession', ridGuard)
       return true
     } catch (error: unknown) {
@@ -3799,12 +3716,14 @@ export const useGameStore = defineStore('game', () => {
     setupHostMessageHandlers()
     // Немедленно шлем консистентный снапшот, чтобы клиенты выровнялись после рестарта хоста
     broadcastGameState()
-    // Также положим снапшот в localStorage как якорь для быстрых reload клиентов
+    // Также положим снапшот в storageSafe с TTL как якорь для быстрых reload клиентов
     try {
-      localStorage.setItem(HOST_STATE_STORAGE_KEY, JSON.stringify({
-        ts: Date.now(),
-        state: { ...gameState.value }
-      }))
+      storageSafe.setWithTTL(
+        'game',
+        'hostGameStateSnapshot',
+        { ts: Date.now(), state: { ...gameState.value } },
+        HOST_SNAPSHOT_TTL
+      )
     } catch {}
 
     console.log('Host restored with ID (may be same as before):', newPeerId)
@@ -4085,7 +4004,7 @@ export const useGameStore = defineStore('game', () => {
     peerService.disconnect()
     clearSession()
     // Чистим все game-префикс ключи, никнейм сохраняется отдельно (без префикса)
-    removeGameItemsByPrefix(GAME_PREFIX)
+    removeGameItemsByPrefix()
 
     // Полный сброс Pinia state к дефолту
     // 1) Базовые refs
@@ -4100,7 +4019,7 @@ export const useGameStore = defineStore('game', () => {
 
     // 2) Никнейм сохраняем в отдельном ключе, затем очищаем локальный ref
     if (!myNickname.value.startsWith(NICKNAME_PREFIX)) {
-      try { localStorage.setItem('savedNickname', myNickname.value || generateDefaultNickname()) } catch {}
+      try { setNickname(myNickname.value || generateDefaultNickname()) } catch {}
     }
     myNickname.value = ''
 
@@ -4147,7 +4066,7 @@ export const useGameStore = defineStore('game', () => {
     }
 
     // 6) Сброс любых runtime-хранилищ снапшотов
-    try { localStorage.removeItem(HOST_STATE_STORAGE_KEY) } catch {}
+    try { storageSafe.nsRemove('game', 'hostGameStateSnapshot') } catch {}
 
     console.log('✅ Pinia state fully reset to defaults after leaving room')
   }
@@ -4199,6 +4118,10 @@ export const useGameStore = defineStore('game', () => {
   watch(
     [gameState, myPlayerId, myNickname, isHost, hostId, roomId, connectionStatus],
     () => {
+      // При успешном подключении фиксируем метку времени
+      if (connectionStatus.value === 'connected') {
+        sessionTimestamp.value = Date.now()
+      }
       // Сохраняем только если подключены
       if (connectionStatus.value === 'connected' && myPlayerId.value) {
         saveSession()
@@ -4589,6 +4512,7 @@ export const useGameStore = defineStore('game', () => {
     hostId,
     roomId,
     connectionStatus,
+    sessionTimestamp,
     gameMode,
     gamePhase,
     uiConnecting,
@@ -4653,3 +4577,20 @@ export const useGameStore = defineStore('game', () => {
     lastErrorRestore
   }
 })
+// Pinia persist configuration for selective fields and syncTabs
+// Note: setup-style store requires assigning the option to the store function
+;(useGameStore as any).persist = {
+  key: 'game',
+  version: 1,
+  debounceMs: 200,
+  syncTabs: true,
+  paths: [
+    'myPlayerId',
+    'myNickname',
+    'isHost',
+    'hostId',
+    'roomId',
+    'connectionStatus',
+    'sessionTimestamp'
+  ]
+}

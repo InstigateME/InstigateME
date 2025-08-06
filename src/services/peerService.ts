@@ -7,14 +7,15 @@ import type {
   StateAckPayload,
   ResyncRequestPayload
 } from '@/types/game'
-import { 
-  HEARTBEAT_INTERVAL, 
-  HEARTBEAT_TIMEOUT, 
-  HOST_GRACE_PERIOD, 
-  HOST_RECOVERY_ATTEMPTS, 
-  HOST_RECOVERY_INTERVAL, 
-  PROTOCOL_VERSION 
+import {
+  HEARTBEAT_INTERVAL,
+  HEARTBEAT_TIMEOUT,
+  HOST_GRACE_PERIOD,
+  HOST_RECOVERY_ATTEMPTS,
+  HOST_RECOVERY_INTERVAL,
+  PROTOCOL_VERSION
 } from '@/types/game'
+import { storageSafe } from '@/utils/storageSafe'
 
 class PeerService {
   private peer: Peer | null = null
@@ -28,6 +29,8 @@ class PeerService {
   // Сохранение peer ID хоста для восстановления после перезагрузки
   private static readonly HOST_PEER_ID_KEY = 'hostPeerId'
   private static readonly HOST_PEER_ROOM_KEY = 'hostPeerRoom'
+  private static readonly NS_PEER = 'peer'
+  private static readonly HOST_ID_TTL_MS = 24 * 60 * 60 * 1000 // 24 часа
   
   // Heartbeat система
   private heartbeatInterval: number | null = null
@@ -71,7 +74,7 @@ class PeerService {
         }
       }
       
-      // Если ID не найден в localStorage - создаем новый
+      // Если ID не найден в storageSafe - создаем новый
       if (targetPeerId) {
         console.log('🔄 Attempting to restore host with saved ID:', targetPeerId)
         this.peer = new Peer(targetPeerId)
@@ -88,7 +91,7 @@ class PeerService {
           // Если создали новый ID - ОБЯЗАТЕЛЬНО сохраняем его
           if (roomId) {
             this.saveHostPeerId(roomId, id)
-            console.log('💾 NEW host ID saved to localStorage:', id, 'for room:', roomId)
+            console.log('💾 NEW host ID saved via storageSafe:', id, 'for room:', roomId)
           }
         }
         
@@ -110,9 +113,9 @@ class PeerService {
         
         // Если не удалось восстановить сохраненный ID - создаем новый
         if (targetPeerId && (error as any)?.type === 'unavailable-id') {
-          console.log('❌ Saved ID unavailable, creating new host and clearing localStorage...')
+          console.log('❌ Saved ID unavailable, creating new host and clearing storageSafe...')
           
-          // Очищаем устаревший ID из localStorage
+          // Очищаем устаревший ID
           if (roomId) {
             this.clearHostPeerId(roomId)
           }
@@ -963,7 +966,7 @@ class PeerService {
     }
   }
   
-  // Сохранение peer ID хоста для конкретной комнаты
+  // Сохранение peer ID хоста для конкретной комнаты (через storageSafe namespace 'peer' с TTL)
   private saveHostPeerId(roomId: string, peerId: string): void {
     try {
       const hostData = {
@@ -971,44 +974,34 @@ class PeerService {
         roomId,
         timestamp: Date.now()
       }
-      localStorage.setItem(`${PeerService.HOST_PEER_ID_KEY}_${roomId}`, JSON.stringify(hostData))
-      console.log('💾 Host peer ID saved for room:', roomId, 'ID:', peerId)
+      storageSafe.setWithTTL(PeerService.NS_PEER, `${PeerService.HOST_PEER_ID_KEY}_${roomId}`, hostData, PeerService.HOST_ID_TTL_MS)
+      console.log('💾 Host peer ID saved (storageSafe) for room:', roomId, 'ID:', peerId)
     } catch (error) {
-      console.error('Failed to save host peer ID:', error)
+      console.error('Failed to save host peer ID (storageSafe):', error)
     }
   }
-  
-  // Загрузка сохраненного peer ID хоста для конкретной комнаты
+
+  // Загрузка сохраненного peer ID хоста для конкретной комнаты (через storageSafe, с TTL)
   private getSavedHostPeerId(roomId: string): string | null {
     try {
-      const savedData = localStorage.getItem(`${PeerService.HOST_PEER_ID_KEY}_${roomId}`)
-      if (!savedData) return null
-      
-      const hostData = JSON.parse(savedData)
-      
-      // Проверяем актуальность (не старше 24 часов)
-      const maxAge = 24 * 60 * 60 * 1000 // 24 часа
-      if (Date.now() - hostData.timestamp > maxAge) {
-        console.log('🕐 Saved host peer ID expired, removing from localStorage')
-        this.clearHostPeerId(roomId)
-        return null
-      }
-      
-      console.log('📋 Found saved host peer ID for room:', roomId, 'ID:', hostData.peerId)
-      return hostData.peerId
+      const hostData = storageSafe.getWithTTL<any>(PeerService.NS_PEER, `${PeerService.HOST_PEER_ID_KEY}_${roomId}`, null)
+      if (!hostData) return null
+
+      console.log('📋 Found saved host peer ID (storageSafe) for room:', roomId, 'ID:', hostData.peerId)
+      return hostData.peerId || null
     } catch (error) {
-      console.error('Failed to load saved host peer ID:', error)
+      console.error('Failed to load saved host peer ID (storageSafe):', error)
       return null
     }
   }
-  
-  // Очистка сохраненного peer ID хоста
+
+  // Очистка сохраненного peer ID хоста (через storageSafe)
   private clearHostPeerId(roomId: string): void {
     try {
-      localStorage.removeItem(`${PeerService.HOST_PEER_ID_KEY}_${roomId}`)
-      console.log('🗑️ Cleared saved host peer ID for room:', roomId)
+      storageSafe.nsRemove(PeerService.NS_PEER, `${PeerService.HOST_PEER_ID_KEY}_${roomId}`)
+      console.log('🗑️ Cleared saved host peer ID for room (storageSafe):', roomId)
     } catch (error) {
-      console.error('Failed to clear host peer ID:', error)
+      console.error('Failed to clear host peer ID (storageSafe):', error)
     }
   }
   
