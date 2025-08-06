@@ -1,6 +1,6 @@
 # Progress — GameCenter
 
-Обновлено: 05.08.2025
+Обновлено: 06.08.2025
 
 ## Что уже сделано
 - Инициализирован и актуализирован Memory Bank:
@@ -20,15 +20,15 @@
 ## Что осталось (MVP дорожная карта)
 1) Тесты:
    - Unit для gameStore: basic/advanced переходы фаз, консенсус nextRound, начисления очков, подсветка, восстановление.
-   - Unit/интеграционные для миграции: secure voting flow, deterministic fallback, recovery announcement.
-   - E2E: 2 клиента, старт, дисконнект хоста → миграция → продолжение.
+   - Unit/интеграционные для миграции и восстановления: secure voting flow, deterministic fallback (min id только среди «живых»), recovery announcement/new_host_id, строгий критерий успешного restore.
+   - E2E: 2 клиента, старт, дисконнект/перезагрузка хоста → health‑checked discovery → либо восстановление к тому же hostId, либо детерминированная переизбрация → продолжение без split‑brain.
 2) Протокол/peerService:
-   - Уточнить retry/timeout/backoff политики, обработку ошибок, идемпотентные ресинк‑механики.
-   - Проверить и доработать merge сетей (NetworkMerge*), правила разрешения конфликтов.
+   - Вынести health‑check кандидатов и blacklist в peerService; выровнять API (getPeer/hasConnection/connectToPeer/cleanupInactiveConnections).
+   - Уточнить retry/timeout/backoff, идемпотентные resync‑механики, audit на reentrancy discovery/handlers.
 3) Навигационный флоу:
-   - Гварды и UX-переходы Lobby → GameField → выход/возврат, отображение статусов connecting/discovering/restoring/migration.
+   - Гварды и UX‑состояния: connecting/discovering/restoring/migration; убрать ложные «успешно восстановлено» до state sync.
 4) UI/UX:
-   - Индикаторы статусов (connecting/connected, discovering/restoring, migration in progress), прогрессы голосов/ставок, видимость кнопок по ролям/фазам.
+   - Индикаторы статусов (connecting/connected, discovering/restoring, migration in progress), прогрессы голосов/ставок, доступность действий по ролям/фазам.
 
 ## Риски/блокеры
 - P2P в гетерогенных сетях (NAT/ICE) может приводить к флаки‑поведению.
@@ -37,12 +37,15 @@
 
 ## Метрики статуса
 - [x] Протокол сообщений типизирован и используется в stores.
+- [x] Исправлены сценарии зацикливания на недоступном hostId (health‑check + blacklist).
+- [x] Статус восстановления помечается только после валидного state sync.
 - [ ] Машина состояний покрывает основные переходы и миграцию тестами.
 - [ ] Unit‑тесты на критичные переходы проходят.
-- [ ] e2e сценарий миграции хоста стабилен.
+- [ ] e2e сценарий миграции/восстановления хоста стабилен.
 - [ ] UI показывает статусы соединения/реконнектов/миграции.
 
 ## Следующие конкретные действия
-- Сформировать тест‑кейсы (Vitest) для флоу basic/advanced и миграции; подготовить фикстуры gameState.
-- Определить тайминги/моки для стабильных e2e (Playwright) и сценарий миграции.
-- Провести ревизию peerService на предмет ретраев/таймаутов и идемпотентности sync/merge.
+- Сформировать тест‑кейсы (Vitest) для флоу basic/advanced и миграции/восстановления; подготовить фикстуры gameState.
+- Перенести health‑check/blacklist/discovery в peerService и покрыть unit‑тестами.
+- Определить тайминги/моки для стабильных e2e (Playwright) сценариев: reload хоста, потеря хоста, переизбрация, восстановление.
+- Провести ревизию peerService на предмет ретраев/таймаутов и идемпотентности sync/merge; добавить reentrancy guards.
