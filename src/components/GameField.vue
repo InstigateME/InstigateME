@@ -4,9 +4,11 @@
       <div class="header">
         <h1 class="title">Провокатор</h1>
         <div class="header-actions">
-          <button class="help-btn" @click="showRules = true" aria-label="Правила игры" title="Правила игры">
-            ❓
-          </button>
+          <RulesDialog  />
+
+          <!-- Кнопка-конверт вынесена в отдельный компонент с дефолтной кнопкой и опциональным слотом -->
+          <EnvelopeButton />
+
           <button class="leave-btn" @click="leaveGame">
             Покинуть игру
           </button>
@@ -401,67 +403,7 @@
     </div>
 
     <!-- Popup правил -->
-    <div v-if="showRules" class="modal-overlay" @click.self="showRules = false">
-      <div class="modal">
-        <div class="modal-header">
-          <h3>Правила игры</h3>
-          <button class="modal-close" @click="showRules = false" aria-label="Закрыть">✕</button>
-        </div>
-        <div class="modal-content">
-          <article class="rules">
-            <header class="rules__header">
-              <h4 class="rules__title">Провокатор — правила</h4>
-              <p class="rules__subtitle">Быстрый вход, простое подключение, минимальные задержки, надежность при миграции хоста</p>
-            </header>
-
-            <section class="rules__section">
-              <h5 class="rules__h">Почему эта игра</h5>
-              <p class="rules__p">
-                Игра демонстрирует модель P2P‑мультиплеера без сервера реального времени: игроки соединяются напрямую через WebRTC/Peer, создавая комнаты (лобби) и играя с минимальными инфраструктурными затратами и задержками.
-              </p>
-            </section>
-
-            <section class="rules__section">
-              <h5 class="rules__h">Как играть (фазы)</h5>
-              <ol class="rules__list">
-                <li><strong>drawing_question</strong> — текущий игрок вытягивает вопрос.</li>
-                <li><strong>voting/secret_voting</strong> — базовый режим: голосование за «провокатора», можно выбрать до двух игроков.</li>
-                <li><strong>betting</strong> — базовый режим: игроки делают ставку (0 / +‑ / +).</li>
-                <li><strong>answering</strong> — advanced: автор (выбранный игрок) пишет ответ.</li>
-                <li><strong>guessing</strong> — advanced: остальные отправляют догадки.</li>
-                <li><strong>selecting_winners</strong> — advanced: текущий игрок отмечает близкие по смыслу ответы (каждый отмеченный получает +1).</li>
-                <li><strong>results/advanced_results</strong> — таблица результатов раунда и переход к следующему.</li>
-              </ol>
-            </section>
-
-            <section class="rules__section">
-              <h5 class="rules__h">Начисление очков</h5>
-              <ul class="rules__bullets">
-                <li>В базовом режиме очки зависят от голосов и ставок (по договоренности ведущего).</li>
-                <li>В advanced очки выдаются за близость догадки к загаданному ответу (по выбору ведущего).</li>
-              </ul>
-            </section>
-
-            <section class="rules__section">
-              <h5 class="rules__h">Управление и статусы</h5>
-              <ul class="rules__bullets">
-                <li>Интерфейс подсказывает состояние: «Ждем ход», «Отвечает», «Ждем голос/ставку/догадку».</li>
-                <li>Кнопка «Следующий раунд» доступна всем; хост переводит игру к следующей фазе.</li>
-                <li>Внизу страницы всегда видно код комнаты и статус подключения.</li>
-              </ul>
-            </section>
-
-            <section class="rules__section">
-              <h5 class="rules__h">Минимальные требования</h5>
-              <p class="rules__p">Для старта базового режима необходимо минимум 3 игрока.</p>
-            </section>
-          </article>
-        </div>
-        <div class="modal-footer">
-          <button class="btn-primary" @click="showRules = false">Понятно</button>
-        </div>
-      </div>
-    </div>
+    <!-- Инстанс RulesDialog уже используется как обертка для кнопки и управляется тем же v-model -->
   </div>
 </template>
 
@@ -510,8 +452,8 @@ async function copyDebug() {
   }
 }
 
-// Popup правил
-const showRules = ref(false)
+import RulesDialog from './RulesDialog.vue'
+import EnvelopeButton from './EnvelopeButton.vue'
 
 // Чтение стора
 const phase = computed(() => {
@@ -1080,6 +1022,10 @@ watch([() => gameStore.gameState.gameStarted, myId], ([started, id]: [boolean | 
   font-size: 20px;
   font-weight: 800;
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
   transition: transform 0.12s ease, box-shadow 0.2s ease, border-color 0.2s ease, background 0.2s ease;
 }
 .help-btn:hover {
@@ -1087,6 +1033,15 @@ watch([() => gameStore.gameState.gameStarted, myId], ([started, id]: [boolean | 
   box-shadow: 0 6px 14px rgba(30, 60, 114, 0.08);
   border-color: #dbe6f3;
   background: #ffffff;
+}
+/* Стили для конверта, наследуем оформление help-btn */
+.envelope-btn {
+  padding: 0;
+}
+.envelope-icon {
+  width: 22px;
+  height: 22px;
+  color: #1f2937;
 }
 
 /* Modal (popup) */

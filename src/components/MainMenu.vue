@@ -1,7 +1,18 @@
 <template>
   <div class="main-menu">
     <div class="container">
-      <h1 class="title">Провокатор</h1>
+      <div class="header">
+        <h1 class="title">Провокатор</h1>
+
+        <div class="header-actions">
+          <RulesDialog  />
+
+          <!-- Кнопка-конверт вынесена в отдельный компонент с дефолтной кнопкой и опциональным слотом -->
+          <EnvelopeButton />
+
+        </div>
+      </div>
+
       <p class="subtitle">Многопользовательская карточная игра</p>
 
       <div class="form-section">
@@ -29,6 +40,8 @@
       <div class="divider">
         <span>или</span>
       </div>
+
+      <!-- Удалён старый блок ссылок: перенесено в header -->
 
       <div class="form-section">
         <div class="input-group">
@@ -77,6 +90,8 @@
 import { ref, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useGameStore } from '@/stores/gameStore'
+import RulesDialog from './RulesDialog.vue'
+import EnvelopeButton from './EnvelopeButton.vue'
 
 const router = useRouter()
 const route = useRoute()
@@ -194,17 +209,16 @@ const pasteFromClipboard = async () => {
 }
 
 .title {
-  text-align: center;
   color: #333;
-  margin-bottom: 10px;
-  font-size: 2.5rem;
-  font-weight: bold;
+  margin: 0;
+  font-size: 2.0rem;
+  font-weight: 800;
 }
 
 .subtitle {
   text-align: center;
   color: #666;
-  margin-bottom: 30px;
+  margin: 8px 0 30px;
   font-size: 1rem;
 }
 
@@ -408,5 +422,54 @@ const pasteFromClipboard = async () => {
 .input-with-button .btn-icon:hover:not(:disabled) {
   background: #f0f4ff;
   color: #764ba2;
+}
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.icon-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  border: 2px solid #e1e5e9;
+  background: #ffffff;
+  color: #4f46e5;
+  text-decoration: none;
+  transition: background-color 0.2s ease, color 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.icon-link:hover {
+  background: #f0f4ff;
+  color: #3730a3;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.2);
+}
+
+.icon {
+  width: 20px;
+  height: 20px;
+}
+
+.qmark {
+  font-size: 18px;
+  line-height: 1;
+}
+
+@media (max-width: 400px) {
+  .title {
+    font-size: 1.8rem;
+  }
 }
 </style>
