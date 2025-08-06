@@ -17,7 +17,23 @@
   - Роутер: router/index.ts.
   - Тестовая инфраструктура: Vitest (unit), Playwright (e2e).
 
+## Последние изменения
+
+- UI:
+  - Удален глобальный оверлей восстановления в src/App.vue (rehydration-overlay) — глобальной индикации переподключения больше нет.
+  - В src/components/GameField.vue удалены все глобальные блоки reconnect-info из всех игровых фаз; в лобби внутри GameField контент показывается только при connected.
+  - В src/components/Lobby.vue сохранен локальный баннер reconnect-banner — Pop-индикатор отображается только в лобби и в самой игре при переподключении; в главном меню Pop отсутствует.
+- Документация: обновлен memory-bank/activeContext.md, зафиксировано новое поведение индикации переподключения (только Lobby и GameField).
+- Состояние сети/дискавери: подтверждены паттерны из systemPatterns.md (health‑check кандидатов, blacklist, строгий критерий restore).
+- Debug‑флаг:
+  - Добавлена утилита src/utils/debug.ts с isDebugEnabled(), enableDebug(), disableDebug().
+  - В src/stores/gameStore.ts добавлен и экспортирован computed isDebug = computed(() => isDebugEnabled()).
+  - Компоненты могут условно отображать отладочный UI: v-if="game.isDebug".
+
 ## Что осталось (MVP дорожная карта)
+- Интегрировать флаг отладки в нужные компоненты (панели/кнопки/логи) через v-if="game.isDebug".
+- Добавить unit‑тесты на utils/debug.ts (обработка '0'/'false'/'off', пустые/непустые значения).
+- (Опционально) E2E сценарий проверки условной видимости debug‑элементов при установленном __app_debug.
 1) Тесты:
    - Unit для gameStore: basic/advanced переходы фаз, консенсус nextRound, начисления очков, подсветка, восстановление.
    - Unit/интеграционные для миграции и восстановления: secure voting flow, deterministic fallback (min id только среди «живых»), recovery announcement/new_host_id, строгий критерий успешного restore.
@@ -36,6 +52,10 @@
 - Флаки e2e без стабильных таймингов/моков.
 
 ## Метрики статуса
+- [x] Удалены лишние reconnect‑сообщения в UI (GameField) — только popup.
+- [x] Глобальная индикация переподключения убрана из App.vue.
+- [x] Локальный Pop/баннер виден только в Lobby и GameField при переподключении; в MainMenu отсутствует.
+- [x] Глобальный debug‑флаг доступен через store.isDebug и управляется localStorage (__app_debug).
 - [x] Протокол сообщений типизирован и используется в stores.
 - [x] Исправлены сценарии зацикливания на недоступном hostId (health‑check + blacklist).
 - [x] Статус восстановления помечается только после валидного state sync.

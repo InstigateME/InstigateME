@@ -20,12 +20,6 @@ const uiConnecting = computed(() => gameStore.uiConnecting)
   <div id="app">
     <RouterView />
 
-    <div v-if="uiConnecting" class="rehydration-overlay" aria-live="polite">
-      <div class="rehydration-card">
-        <div class="spinner" aria-hidden="true"></div>
-        <div class="title">Восстанавливаем соединение…</div>
-      </div>
-    </div>
 
     <!-- Debug-панель удалена по требованию -->
   </div>
@@ -52,53 +46,16 @@ body {
 
 /* Debug-панель и стили удалены по требованию */
 
-/* Overlay для быстрой ре-гидрации: поверх интерфейса, без белого экрана */
-.rehydration-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(245, 245, 245, 0.6);
-  backdrop-filter: blur(2px);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 9999;
-}
-
-.rehydration-card {
-  background: #ffffff;
-  border: 1px solid rgba(0,0,0,0.06);
-  box-shadow: 0 4px 16px rgba(0,0,0,0.08);
-  border-radius: 12px;
-  padding: 16px 20px;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  animation: fadeIn 160ms ease-in;
-}
-
-.rehydration-card .title {
-  font-weight: 700;
-  font-size: 15px;
-  color: #222;
-  margin-bottom: 2px;
-}
-
-.rehydration-card .subtitle {
-  font-size: 12px;
-  color: #666;
-}
-
-.spinner {
-  width: 18px;
-  height: 18px;
-  border: 2px solid #e5e7eb;
-  border-top-color: #6366f1;
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
-}
-
-@keyframes spin {
-  to { transform: rotate(360deg); }
+/* Анимации */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 /* Глобальные стили для кнопок */

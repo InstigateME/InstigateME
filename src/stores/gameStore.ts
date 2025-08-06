@@ -1,6 +1,7 @@
 import {ref, computed, watch} from 'vue'
 import {defineStore} from 'pinia'
 import { storageSafe } from '@/utils/storageSafe'
+import { isDebugEnabled } from '@/utils/debug'
 import type {
   Player,
   GameState,
@@ -113,6 +114,8 @@ interface SessionData extends ExtendedSessionData {
 }
 
 export const useGameStore = defineStore('game', () => {
+  // Debug flag: включается, если в localStorage есть "__app_debug"
+  const isDebug = computed<boolean>(() => isDebugEnabled())
   // ---------- StorageSafe wrappers ----------
   // Очистка namespace 'game'
   const removeGameItemsByPrefix = () => {
@@ -3409,6 +3412,8 @@ export const useGameStore = defineStore('game', () => {
   function createCandidateBlacklist() {
     const set = new Set<string>()
     return {
+    // Debug
+    isDebug,
       add: (id: string) => set.add(id),
       has: (id: string) => set.has(id)
     }
@@ -4999,21 +5004,4 @@ export const useGameStore = defineStore('game', () => {
     lastErrorJoinRoom,
     lastErrorRestore
   }
-}, {
-  // Persist-конфиг Pinia
-  persist: {
-    key: 'game',
-    version: 1,
-    debounceMs: 200,
-    syncTabs: true,
-    paths: [
-      'myPlayerId',
-      'myNickname',
-      'isHost',
-      'hostId',
-      'roomId',
-      'connectionStatus',
-      'sessionTimestamp'
-    ]
-  } as any
 })

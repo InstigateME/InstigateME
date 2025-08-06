@@ -17,11 +17,7 @@
 
       <!-- Лобби -->
       <div v-if="phase === 'lobby'" class="waiting-block">
-        <!-- Если идет восстановление или пересинхронизация — не показываем лобби-текст, а статус -->
-        <div v-if="gameStore.connectionStatus !== 'connected'" class="reconnect-info">
-          <p>Переподключение… сохраняем состояние игры.</p>
-        </div>
-        <template v-else>
+        <template v-if="gameStore.connectionStatus === 'connected'">
           <p>Ожидание старта игры. Подключено игроков: {{ players.length }}.</p>
           <div v-if="isHost" class="lobby-controls">
             <button :disabled="!canStartBasic" @click="startBasic">Начать (basic)</button>
@@ -41,10 +37,6 @@
 
       <!-- Вытягивание вопроса -->
       <div v-else-if="phase === 'drawing_question'" class="phase-block draw-block">
-        <!-- Глобальная индикация переподключения внутри активной фазы -->
-        <div v-if="gameStore.connectionStatus !== 'connected'" class="reconnect-info" style="margin-bottom:10px">
-          Переподключение… сохраняем состояние игры.
-        </div>
         <div class="draw-header">
           <h2>Вытягивание вопроса</h2>
           <div class="turn-chip" :title="'Ходит игрок: ' + currentTurnName">
@@ -77,7 +69,6 @@
            class="phase-block voting-block">
         <!-- Глобальная индикация переподключения -->
         <div v-if="gameStore.connectionStatus !== 'connected'" class="reconnect-info" style="margin-bottom:10px">
-          Переподключение… сохраняем состояние игры.
         </div>
         <!-- Показываем карточку вопроса над голосованием, чтобы она не исчезала после вытягивания -->
         <div class="question-card question-card--large" v-if="currentQuestion">{{
@@ -118,9 +109,9 @@
 
       <!-- Ставки (basic) -->
       <div v-else-if="phase === 'betting'" class="phase-block betting-block">
-        <!-- Глобальная индикация переподключения -->
-        <div v-if="gameStore.connectionStatus !== 'connected'" class="reconnect-info" style="margin-bottom:10px">
-          Переподключение… сохраняем состояние игры.
+        <!-- Показываем карточку вопроса над голосованием, чтобы она не исчезала после вытягивания -->
+        <div class="question-card question-card--large" v-if="currentQuestion">{{ currentQuestion
+          }}
         </div>
         <div class="betting-header">
           <h2>Ставка</h2>
@@ -153,10 +144,6 @@
 
       <!-- Ответ (advanced) -->
       <div v-else-if="phase === 'answering'" class="phase-block answering-block">
-        <!-- Глобальная индикация переподключения -->
-        <div v-if="gameStore.connectionStatus !== 'connected'" class="reconnect-info" style="margin-bottom:10px">
-          Переподключение… сохраняем состояние игры.
-        </div>
         <div class="answering-header">
           <h2>Ответ на вопрос</h2>
           <span class="answering-hint" v-if="isAnswering">Напишите короткий и ясный ответ</span>
@@ -180,10 +167,6 @@
 
       <!-- Догадки (advanced) -->
       <div v-else-if="phase === 'guessing'" class="phase-block guessing-block">
-        <!-- Глобальная индикация переподключения -->
-        <div v-if="gameStore.connectionStatus !== 'connected'" class="reconnect-info" style="margin-bottom:10px">
-          Переподключение… сохраняем состояние игры.
-        </div>
         <div class="guessing-header">
           <h2>Угадай ответ</h2>
           <span class="guessing-hint" v-if="!isAnswering">Попробуйте угадать максимально точно</span>
@@ -208,10 +191,6 @@
 
       <!-- Выбор победителей (advanced) -->
       <div v-else-if="phase === 'selecting_winners'" class="phase-block winners-block">
-        <!-- Глобальная индикация переподключения -->
-        <div v-if="gameStore.connectionStatus !== 'connected'" class="reconnect-info" style="margin-bottom:10px">
-          Переподключение… сохраняем состояние игры.
-        </div>
         <div class="winners-header">
           <h2>Выберите близкие по смыслу ответы</h2>
           <span class="winners-hint">Выбирает: <strong>{{ currentTurnName }}</strong></span>
@@ -268,10 +247,6 @@
 
       <!-- Результаты -->
       <div v-else-if="phase === 'results' || phase === 'advanced_results'" class="results-block">
-        <!-- Глобальная индикация переподключения -->
-        <div v-if="gameStore.connectionStatus !== 'connected'" class="reconnect-info" style="margin-bottom:10px">
-          Переподключение… сохраняем состояние игры.
-        </div>
         <h2>Результаты раунда</h2>
         <div v-if="phase === 'advanced_results' && advancedAnswer" class="advanced-answer">
           Ответ: <strong>{{ advancedAnswer }}</strong>
@@ -327,10 +302,6 @@
 
       <!-- Конец игры -->
       <div v-else-if="phase === 'game_over'" class="winner-block">
-        <!-- Глобальная индикация переподключения -->
-        <div v-if="gameStore.connectionStatus !== 'connected'" class="reconnect-info" style="margin-bottom:10px">
-          Переподключение… сохраняем состояние игры.
-        </div>
         <h2>Игра завершена</h2>
         <p>Победитель: {{ winnerNameComputed }}</p>
         <button v-if="isHost" @click="startBasic">Начать новую игру</button>
@@ -390,7 +361,7 @@
           </p>
 
           <!-- Debug panel -->
-          <div class="debug-panel">
+          <div v-if="isDebug" class="debug-panel">
             <div class="debug-actions">
               <button class="btn-secondary" @click="copyDebug">Copy Debug</button>
               <span v-if="copiedOk" class="copy-status">Скопировано</span>
@@ -408,12 +379,38 @@
 </template>
 
 <script setup lang="ts">
-import {ref, computed, watch} from 'vue'
+import {ref, computed, watch, onUnmounted} from 'vue'
 import {useRouter} from 'vue-router'
 import {useGameStore} from '@/stores/gameStore'
+import { peerService } from '@/services/peerService'
+import { isDebugEnabled, DEBUG_FLAG_EVENT } from '@/utils/debug'
 
 const router = useRouter()
 const gameStore = useGameStore()
+
+const isDebug = ref(isDebugEnabled())
+// Реактивное переключение debug-режима по глобальному событию и изменениям storage (например, из другой вкладки)
+if (typeof window !== 'undefined') {
+  const onDebugEvent = (e: Event) => {
+    // detail.enabled может отсутствовать — в этом случае читаем текущее из isDebugEnabled()
+    const ce = e as CustomEvent | undefined
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const enabled = (ce && (ce as any).detail && typeof (ce as any).detail.enabled === 'boolean')
+      ? (ce as any).detail.enabled as boolean
+      : undefined
+    isDebug.value = typeof enabled === 'boolean' ? enabled : isDebugEnabled()
+  }
+  window.addEventListener(DEBUG_FLAG_EVENT, onDebugEvent)
+  window.addEventListener('storage', (ev: StorageEvent) => {
+    if (ev.key === '__app_debug') {
+      isDebug.value = isDebugEnabled()
+    }
+  })
+  // Очистка слушателей при размонтировании компонента
+  onUnmounted(() => {
+    window.removeEventListener(DEBUG_FLAG_EVENT, onDebugEvent as EventListener)
+  })
+}
 
 // Debug panel state
 const copiedOk = ref(false)
@@ -421,14 +418,14 @@ const debugPayload = computed(() => {
   // Берём минимально запрошенный срез
   return {
     state: gameStore.gameState,
-    peers: gameStore.peerService?.getActiveConnections
-      ? gameStore.peerService.getActiveConnections()
+    peers: peerService?.getActiveConnections
+      ? peerService.getActiveConnections()
       : [],
-    allKnownPeers: gameStore.peerService?.getAllKnownPeers
-      ? gameStore.peerService.getAllKnownPeers()
+    allKnownPeers: peerService?.getAllKnownPeers
+      ? peerService.getAllKnownPeers()
       : [],
-    role: gameStore.peerService?.getCurrentRole
-      ? gameStore.peerService.getCurrentRole()
+    role: peerService?.getCurrentRole
+      ? peerService.getCurrentRole()
       : (gameStore.isHost ? 'host' : 'client'),
     myId: (gameStore.myPlayerId as string) || '',
     roomId: (gameStore.gameState.roomId as string) || ''
