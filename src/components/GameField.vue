@@ -150,6 +150,11 @@
           <span class="answering-hint" v-else>Ждем ответ от: {{ answeringName }}</span>
         </div>
 
+        <!-- Дублируем карточку вопроса перед вводом ответа -->
+        <div class="question-card question-card--large" v-if="currentQuestion">
+          {{ currentQuestion }}
+        </div>
+
         <div v-if="isAnswering" class="answering-content">
           <textarea class="answering-textarea" v-model="answer" placeholder="Введите ваш ответ"></textarea>
           <div class="answering-actions">
@@ -173,6 +178,11 @@
           <span class="guessing-hint" v-else>Вы автор ответа — ожидание догадок</span>
         </div>
 
+        <!-- Дублируем текущий вопрос в фазе guessing -->
+        <div class="question-card question-card--large" v-if="currentQuestion">
+          {{ currentQuestion }}
+        </div>
+
         <div v-if="!isAnswering" class="guessing-content">
           <textarea class="guessing-textarea" v-model="guess" placeholder="Ваш вариант ответа"></textarea>
           <div class="guessing-actions">
@@ -194,6 +204,11 @@
         <div class="winners-header">
           <h2>Выберите близкие по смыслу ответы</h2>
           <span class="winners-hint">Выбирает: <strong>{{ currentTurnName }}</strong></span>
+        </div>
+
+        <!-- Дублируем текущий вопрос в фазе selecting_winners -->
+        <div class="question-card question-card--large" v-if="currentQuestion">
+          {{ currentQuestion }}
         </div>
         <!-- Показываем загаданный ответ ТОЛЬКО автору (игроку, который его загадал) -->
         <div v-if="isAnswering && advancedAnswer" class="author-answer">
@@ -248,6 +263,12 @@
       <!-- Результаты -->
       <div v-else-if="phase === 'results' || phase === 'advanced_results'" class="results-block">
         <h2>Результаты раунда</h2>
+
+        <!-- Дублируем текущий вопрос в фазе advanced_results -->
+        <div v-if="phase === 'advanced_results' && currentQuestion" class="question-card question-card--large">
+          {{ currentQuestion }}
+        </div>
+
         <div v-if="phase === 'advanced_results' && advancedAnswer" class="advanced-answer">
           Ответ: <strong>{{ advancedAnswer }}</strong>
         </div>

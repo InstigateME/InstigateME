@@ -58,19 +58,19 @@
         </div>
 
         <button
+          class="btn btn-secondary btn-large"
+          @click="joinRoom"
+          :disabled="!gameStore.myNickname.trim() || !joinRoomId.trim() || gameStore.connectionStatus === 'connecting'"
+        >
+          {{ gameStore.connectionStatus === 'connecting' ? 'Подключение...' : 'Присоединиться' }}
+        </button>
+        <button
           class="btn btn-secondary btn-medium"
           style="margin-bottom: 12px;"
           @click="pasteFromClipboard"
           :disabled="gameStore.connectionStatus === 'connecting'"
         >
           Вставить из буфера
-        </button>
-        <button
-          class="btn btn-secondary btn-large"
-          @click="joinRoom"
-          :disabled="!gameStore.myNickname.trim() || !joinRoomId.trim() || gameStore.connectionStatus === 'connecting'"
-        >
-          {{ gameStore.connectionStatus === 'connecting' ? 'Подключение...' : 'Присоединиться' }}
         </button>
       </div>
 

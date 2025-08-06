@@ -160,6 +160,10 @@ export const useGameStore = defineStore('game', () => {
     gameState.value.gameMode = currentMode.value
   }
 
+  // Две независимые колоды вопросов на игру (перетасовываются один раз при старте)
+  const basicDeck = ref<string[]>([])
+  const advancedDeck = ref<string[]>([])
+
   // Вопросы импортируются динамически в initializeGame из '@/data/questions.ts'
 
   const initializeGame = async (mode: 'basic' | 'advanced' = 'basic') => {
@@ -171,26 +175,33 @@ export const useGameStore = defineStore('game', () => {
     gameState.value.gameMode = mode
     gameState.value.phase = 'lobby'
 
-    // Загружаем вопросы из TypeScript-модуля с двумя наборами
+    // Загружаем вопросы из TypeScript-модуля с двумя наборами и формируем две независимые колоды
     try {
       const mod = await import('@/data/questions')
       // Согласно файлу src/data/questions.ts экспорт по умолчанию содержит:
       // { questionsBasic: whoIsItQuestions, questionsAdvanced: answerItQuestions }
-      const picked =
-        (currentMode.value === 'basic' ? mod.default.questionsBasic : mod.default.questionsAdvanced) ||
-        (mode === 'basic' ? mod.default.questionsBasic : mod.default.questionsAdvanced)
+      const questionsBasic = Array.isArray(mod?.default?.questionsBasic) ? mod.default.questionsBasic.slice() : []
+      const questionsAdvanced = Array.isArray(mod?.default?.questionsAdvanced) ? mod.default.questionsAdvanced.slice() : []
 
-      // Перемешиваем список вопросов один раз при старте игры (Fisher–Yates)
-      const shuffled = Array.isArray(picked) ? picked.slice() : []
-      for (let i = shuffled.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1))
-        ;[shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]]
+      // Перемешиваем каждую колоду отдельно один раз при старте игры (Fisher–Yates)
+      const fyShuffle = (arr: string[]) => {
+        for (let i = arr.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1))
+          ;[arr[i], arr[j]] = [arr[j], arr[i]]
+        }
+        return arr
       }
 
-      gameState.value.questionCards = shuffled
+      basicDeck.value = fyShuffle(questionsBasic)
+      advancedDeck.value = fyShuffle(questionsAdvanced)
+
+      // Отображаем в gameState текущую активную колоду для совместимости с существующим UI
+      gameState.value.questionCards = currentMode.value === 'basic' ? basicDeck.value.slice() : advancedDeck.value.slice()
     } catch {
-      // Если не удалось загрузить вопросы — оставляем пустую колоду,
+      // Если не удалось загрузить вопросы — оставляем пустые колоды,
       // чтобы UI явно показал отсутствие данных вместо плейсхолдеров.
+      basicDeck.value = []
+      advancedDeck.value = []
       gameState.value.questionCards = []
     }
 
@@ -226,9 +237,13 @@ export const useGameStore = defineStore('game', () => {
     gameMode.value = currentMode.value
     gameState.value.gameMode = currentMode.value
 
-    // Переводим в фазу вытягивания вопроса
+    // Переводим в фазу вытягивания вопроса и синхронизируем snapshot активной колоды
     gamePhase.value = 'drawing_question'
     gameState.value.phase = 'drawing_question'
+    {
+      const activeDeckRef = currentMode.value === 'basic' ? basicDeck : advancedDeck
+      gameState.value.questionCards = activeDeckRef.value.slice()
+    }
   };
 
   // Обработка голосов и ставок после раунда
@@ -318,7 +333,7 @@ export const useGameStore = defineStore('game', () => {
 
   // ВАЖНО: drawCard вызывается на стороне хоста (локально у хоста), но инициироваться может клиентом через draw_question_request.
   // Не полагаемся на myPlayerId на хосте, а проверяем requesterId, который передаём из обработчика сообщения.
-  const drawCard = (requesterId?: string | null) => {
+  const drawCard = async (requesterId?: string | null) => {
     // Действие разрешено только в фазе вытягивания вопроса
     if (gamePhase.value !== 'drawing_question') return null
 
@@ -329,10 +344,36 @@ export const useGameStore = defineStore('game', () => {
     // Если вызвано по сети (requesterId передан), проверяем, что именно текущий игрок запросил действие.
     if (requesterId && requesterId !== currentTurnPid) return null
 
-    if (gameState.value.questionCards.length === 0) return null
+    // Определяем активную колоду по текущему режиму
+    const activeDeckRef = currentMode.value === 'basic' ? basicDeck : advancedDeck
 
-    // Вытягиваем карту
-    const card = gameState.value.questionCards.shift() || null
+    // Если активная колода пуста — перетасовываем заново, как согласовано
+    if (activeDeckRef.value.length === 0) {
+      try {
+        const mod = await import('@/data/questions')
+        const source = currentMode.value === 'basic'
+          ? (Array.isArray(mod?.default?.questionsBasic) ? mod.default.questionsBasic.slice() : [])
+          : (Array.isArray(mod?.default?.questionsAdvanced) ? mod.default.questionsAdvanced.slice() : [])
+
+        // Перемешать
+        for (let i = source.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1))
+          ;[source[i], source[j]] = [source[j], source[i]]
+        }
+        activeDeckRef.value = source
+      } catch {
+        // Не удалось перезагрузить — оставим пусто и прервём
+        activeDeckRef.value = []
+      }
+    }
+
+    if (activeDeckRef.value.length === 0) return null
+
+    // Вытягиваем карту из соответствующей колоды
+    const card = activeDeckRef.value.shift() || null
+
+    // Обновляем совместимый snapshot для UI
+    gameState.value.questionCards = activeDeckRef.value.slice()
     gameState.value.currentQuestion = card
 
     // Сначала рассылаем состояние с установленным вопросом в фазе drawing_question
@@ -434,12 +475,14 @@ export const useGameStore = defineStore('game', () => {
         gameState.value.bets = {}
         gameState.value.roundScores = {}
 
-        // Проверка на конец игры
-        // Проверка на конец игры по лимиту раундов или отсутствию карт
-        if (currentRound.value > TOTAL_ROUNDS || gameState.value.questionCards.length === 0) {
+        // Проверка на конец игры только по лимиту раундов (колоды перерассортировываются при исчерпании)
+        if (currentRound.value > TOTAL_ROUNDS) {
           gamePhase.value = 'game_over'
           gameState.value.phase = 'game_over'
         } else {
+          // Синхронизируем snapshot активной колоды для UI
+          const activeDeckRef = currentMode.value === 'basic' ? basicDeck : advancedDeck
+          gameState.value.questionCards = activeDeckRef.value.slice()
           gamePhase.value = 'drawing_question'
           gameState.value.phase = 'drawing_question'
         }
@@ -516,11 +559,14 @@ export const useGameStore = defineStore('game', () => {
         gameState.value.advancedAnswer = null
         gameState.value.roundScores = {}
 
-        // Завершаем игру по лимиту раундов или когда закончились карты
-        if (currentRound.value > TOTAL_ROUNDS || gameState.value.questionCards.length === 0) {
+        // Завершаем игру только по лимиту раундов (колоды перерассортировываются при исчерпании)
+        if (currentRound.value > TOTAL_ROUNDS) {
           gamePhase.value = 'game_over'
           gameState.value.phase = 'game_over'
         } else {
+          // Синхронизируем snapshot активной колоды для UI
+          const activeDeckRef = currentMode.value === 'basic' ? basicDeck : advancedDeck
+          gameState.value.questionCards = activeDeckRef.value.slice()
           gamePhase.value = 'drawing_question'
           gameState.value.phase = 'drawing_question'
         }
@@ -1568,7 +1614,7 @@ export const useGameStore = defineStore('game', () => {
     // -------- Игровые сообщения от клиентов к хосту --------
 
     // Вытягивание вопроса — разрешено только текущему игроку в фазе drawing_question
-    peerService.onMessage('draw_question_request', (message, conn) => {
+    peerService.onMessage('draw_question_request', async (message, conn) => {
       const requesterId = conn?.peer || (message as Extract<PeerMessage, { type: 'draw_question_request' }>).payload?.playerId
       console.log('HOST: draw_question_request from', requesterId, 'phase:', gamePhase.value, 'currentTurnPlayerId:', gameState.value.currentTurnPlayerId)
       if (!isHost.value) return
@@ -1576,7 +1622,7 @@ export const useGameStore = defineStore('game', () => {
       if (!requesterId) return
 
       // Передаём requesterId внутрь drawCard для точной проверки
-      const card = drawCard(requesterId)
+      const card = await drawCard(requesterId)
       if (!card) {
         console.log('Ignored draw_question_request: not allowed or no cards left')
         return
