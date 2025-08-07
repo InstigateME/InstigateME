@@ -1,12 +1,7 @@
 <template>
   <!-- Обертка для триггера: если слот не передан — показываем дефолтную кнопку-конверт -->
   <span class="envelope-trigger">
-    <slot
-      name="trigger"
-      :open="open"
-      :close="close"
-      :modelValue="modelValue"
-    >
+    <slot name="trigger" :open="open" :close="close" :modelValue="modelValue">
       <button
         class="envelope-btn"
         :aria-pressed="modelValue"
@@ -34,13 +29,16 @@
  * - По умолчанию рендерит стилизованную кнопку с иконкой конверта.
  * - При клике вызывает open(): открывает ссылку в новой вкладке.
  */
-const props = withDefaults(defineProps<{
-  modelValue?: boolean
-  href?: string
-}>(), {
-  modelValue: false,
-  href: 'https://docs.google.com/forms/d/e/1FAIpQLSfyF3Dq2Sr-UJtdvLUWD6JP3HWP6NCD4i4ek-M5GRlPjhWruA/viewform?usp=dialog'
-})
+const props = withDefaults(
+  defineProps<{
+    modelValue?: boolean
+    href?: string
+  }>(),
+  {
+    modelValue: false,
+    href: 'https://docs.google.com/forms/d/e/1FAIpQLSfyF3Dq2Sr-UJtdvLUWD6JP3HWP6NCD4i4ek-M5GRlPjhWruA/viewform?usp=dialog',
+  },
+)
 
 const emit = defineEmits<{
   (e: 'open'): void
@@ -77,8 +75,13 @@ function close() {
   background: #ffffff;
   color: #4f46e5;
   cursor: pointer;
-  transition: background-color .18s ease, color .18s ease, transform .12s ease, box-shadow .18s ease, border-color .18s ease;
-  box-shadow: 0 1px 2px rgba(15,23,42,0.06);
+  transition:
+    background-color 0.18s ease,
+    color 0.18s ease,
+    transform 0.12s ease,
+    box-shadow 0.18s ease,
+    border-color 0.18s ease;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
   padding: 0;
   line-height: 1;
 }
@@ -97,18 +100,18 @@ function close() {
 
 .envelope-btn:focus {
   outline: none;
-  box-shadow: 0 0 0 3px rgba(79,70,229,0.25);
+  box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.25);
 }
-.envelope-btn[aria-pressed="true"] {
+.envelope-btn[aria-pressed='true'] {
   background: #eef2ff;
   border-color: #c7d2fe;
-  box-shadow: 0 0 0 3px rgba(79,70,229,0.15);
+  box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.15);
 }
 
-.envelope-btn[aria-pressed="true"] {
+.envelope-btn[aria-pressed='true'] {
   background: #eef2ff;
   border-color: #c7d2fe;
-  box-shadow: 0 0 0 3px rgba(79,70,229,0.15);
+  box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.15);
 }
 
 .icon {

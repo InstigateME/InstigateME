@@ -231,5 +231,5 @@ export const storageSafe = {
   buildKey,
   // Дополнительные удобные алиасы для единообразия API в коде:
   nsSetWithTTL: setWithTTL,
-  nsGetWithTTL: getWithTTL
+  nsGetWithTTL: getWithTTL,
 }

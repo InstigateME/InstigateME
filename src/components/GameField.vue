@@ -1,15 +1,15 @@
 <template>
-  <div class="game-field">
+  <div class="game-field" data-testid="game-page">
     <div class="container">
       <div class="header">
         <h1 class="title">Провокатор</h1>
         <div class="header-actions">
-          <RulesDialog  />
+          <RulesDialog />
 
           <!-- Кнопка-конверт вынесена в отдельный компонент с дефолтной кнопкой и опциональным слотом -->
           <EnvelopeButton />
 
-          <button class="leave-btn" @click="leaveGame">
+          <button class="leave-btn" @click="leaveGame" data-testid="leave-game-button">
             Покинуть игру
           </button>
         </div>
@@ -36,10 +36,19 @@
       </div>
 
       <!-- Вытягивание вопроса -->
-      <div v-else-if="phase === 'drawing_question'" class="phase-block draw-block">
+      <div
+        v-else-if="phase === 'drawing_question'"
+        class="phase-block draw-block"
+        data-testid="phase-drawing-question"
+      >
         <div class="draw-header">
           <h2>Вытягивание вопроса</h2>
-          <div class="turn-chip" :title="'Ходит игрок: ' + currentTurnName">
+          <div
+            class="turn-chip"
+            :title="'Ходит игрок: ' + currentTurnName"
+            data-testid="current-turn"
+            :data-current-turn-name="currentTurnName"
+          >
             <span class="chip-dot"></span>
             Ходит: <strong>{{ currentTurnName }}</strong>
           </div>
@@ -55,6 +64,7 @@
             v-if="isMyTurn"
             :disabled="!!currentQuestion"
             @click="onDrawQuestion"
+            data-testid="action-primary"
           >
             🎲 Вытянуть вопрос
           </button>
@@ -65,8 +75,11 @@
       </div>
 
       <!-- Голосование (basic/advanced) -->
-      <div v-else-if="phase === 'voting' || phase === 'secret_voting'"
-           class="phase-block voting-block">
+      <div
+        v-else-if="phase === 'voting' || phase === 'secret_voting'"
+        class="phase-block voting-block"
+        data-testid="phase-voting"
+      >
         <!-- Глобальный popover статуса переподключения -->
         <div
           v-if="gameStore.uiConnecting"
@@ -80,16 +93,15 @@
           </div>
         </div>
         <!-- Показываем карточку вопроса над голосованием, чтобы она не исчезала после вытягивания -->
-        <div class="question-card question-card--large" v-if="currentQuestion">{{
-            currentQuestion
-          }}
+        <div class="question-card question-card--large" v-if="currentQuestion">
+          {{ currentQuestion }}
         </div>
         <div class="voting-header">
           <h2>{{ phase === 'voting' ? 'Голосование' : 'Тайное голосование' }}</h2>
           <span class="vote-hint">Выберите до двух игроков</span>
         </div>
 
-        <div class="players-list players-list--voting">
+        <div class="players-list players-list--voting" data-testid="players-list-voting">
           <button
             v-for="p in otherPlayers"
             :key="p.id"
@@ -107,6 +119,7 @@
         <div class="voting-actions">
           <button
             class="btn-primary vote-submit"
+            data-testid="vote-submit"
             :disabled="selectedVotes.length === 0 || selectedVotes.length > 2 || alreadyVoted"
             @click="onSendVote"
           >
@@ -117,34 +130,52 @@
       </div>
 
       <!-- Ставки (basic) -->
-      <div v-else-if="phase === 'betting'" class="phase-block betting-block">
+      <div
+        v-else-if="phase === 'betting'"
+        class="phase-block betting-block"
+        data-testid="phase-betting"
+      >
         <!-- Показываем карточку вопроса над голосованием, чтобы она не исчезала после вытягивания -->
-        <div class="question-card question-card--large" v-if="currentQuestion">{{ currentQuestion
-          }}
+        <div class="question-card question-card--large" v-if="currentQuestion">
+          {{ currentQuestion }}
         </div>
         <div class="betting-header">
           <h2>Ставка</h2>
           <span class="bet-hint">Выберите один вариант</span>
         </div>
 
-        <div class="bet-cards">
+        <div class="players-list-bet" data-testid="players-list-bet">
           <button
-            v-for="b in ['0','±','+']"
+            v-for="b in ['0', '±', '+']"
             :key="b"
             :disabled="alreadyBet"
-            :class="['bet-chip', { selected: bet === b, 'bet-plus': b === '+', 'bet-plusminus': b === '±', 'bet-zero': b === '0' }]"
+            :class="[
+              'bet-chip',
+              {
+                selected: bet === b,
+                'bet-plus': b === '+',
+                'bet-plusminus': b === '±',
+                'bet-zero': b === '0',
+              },
+            ]"
             @click="bet = b as any"
             :title="'Ставка: ' + b"
           >
-            <span class="bet-sign"
-                  :class="{'bet-plus': b === '+', 'bet-plusminus': b === '±', 'bet-zero': b === '0'}">{{
-                b
-              }}</span>
+            <span
+              class="bet-sign"
+              :class="{ 'bet-plus': b === '+', 'bet-plusminus': b === '±', 'bet-zero': b === '0' }"
+              >{{ b }}</span
+            >
           </button>
         </div>
 
         <div class="betting-actions">
-          <button class="btn-primary bet-submit" :disabled="!bet || alreadyBet" @click="onSendBet">
+          <button
+            class="btn-primary bet-submit"
+            data-testid="bet-submit"
+            :disabled="!bet || alreadyBet"
+            @click="onSendBet"
+          >
             Подтвердить ставку
           </button>
           <span v-if="alreadyBet" class="bet-note">Ставка отправлена</span>
@@ -152,7 +183,11 @@
       </div>
 
       <!-- Ответ (advanced) -->
-      <div v-else-if="phase === 'answering'" class="phase-block answering-block">
+      <div
+        v-else-if="phase === 'answering'"
+        class="phase-block answering-block"
+        data-testid="phase-answering"
+      >
         <div class="answering-header">
           <h2>Ответ на вопрос</h2>
           <span class="answering-hint" v-if="isAnswering">Напишите короткий и ясный ответ</span>
@@ -165,9 +200,16 @@
         </div>
 
         <div v-if="isAnswering" class="answering-content">
-          <textarea class="answering-textarea" v-model="answer" placeholder="Введите ваш ответ"></textarea>
+          <textarea
+            class="answering-textarea"
+            data-testid="answering-textarea"
+            v-model="answer"
+            placeholder="Введите ваш ответ"
+          ></textarea>
           <div class="answering-actions">
-            <button class="btn-primary answering-submit" :disabled="!answer" @click="onSendAnswer">Отправить ответ</button>
+            <button class="btn-primary answering-submit" data-testid="answering-submit" :disabled="!answer" @click="onSendAnswer">
+              Отправить ответ
+            </button>
           </div>
         </div>
 
@@ -175,15 +217,24 @@
           <div class="wait-bubble">
             <span class="dot"></span><span class="dot"></span><span class="dot"></span>
           </div>
-          <p class="wait-note">Ответ пишет: <strong>{{ answeringName }}</strong>. Ждем…</p>
+          <p class="wait-note">
+            Ответ пишет: <strong>{{ answeringName }}</strong
+            >. Ждем…
+          </p>
         </div>
       </div>
 
       <!-- Догадки (advanced) -->
-      <div v-else-if="phase === 'guessing'" class="phase-block guessing-block">
+      <div
+        v-else-if="phase === 'guessing'"
+        class="phase-block guessing-block"
+        data-testid="phase-guessing"
+      >
         <div class="guessing-header">
           <h2>Угадай ответ</h2>
-          <span class="guessing-hint" v-if="!isAnswering">Попробуйте угадать максимально точно</span>
+          <span class="guessing-hint" v-if="!isAnswering"
+            >Попробуйте угадать максимально точно</span
+          >
           <span class="guessing-hint" v-else>Вы автор ответа — ожидание догадок</span>
         </div>
 
@@ -193,9 +244,19 @@
         </div>
 
         <div v-if="!isAnswering" class="guessing-content">
-          <textarea class="guessing-textarea" v-model="guess" placeholder="Ваш вариант ответа"></textarea>
+          <textarea
+            class="guessing-textarea"
+            v-model="guess"
+            placeholder="Ваш вариант ответа"
+          ></textarea>
           <div class="guessing-actions">
-            <button class="btn-primary guessing-submit" :disabled="!guess || alreadyGuessed" @click="onSendGuess">Отправить</button>
+            <button
+              class="btn-primary guessing-submit"
+              :disabled="!guess || alreadyGuessed"
+              @click="onSendGuess"
+            >
+              Отправить
+            </button>
             <span v-if="alreadyGuessed" class="guess-note">Догадка отправлена</span>
           </div>
         </div>
@@ -209,10 +270,16 @@
       </div>
 
       <!-- Выбор победителей (advanced) -->
-      <div v-else-if="phase === 'selecting_winners'" class="phase-block winners-block">
+      <div
+        v-else-if="phase === 'selecting_winners'"
+        class="phase-block winners-block"
+        data-testid="phase-selecting-winners"
+      >
         <div class="winners-header">
           <h2>Выберите близкие по смыслу ответы</h2>
-          <span class="winners-hint">Выбирает: <strong>{{ currentTurnName }}</strong></span>
+          <span class="winners-hint"
+            >Выбирает: <strong>{{ currentTurnName }}</strong></span
+          >
         </div>
 
         <!-- Дублируем текущий вопрос в фазе selecting_winners -->
@@ -226,7 +293,9 @@
         </div>
 
         <div v-if="isChooser" class="winners-select">
-          <p class="winners-note">Отметьте одного или нескольких игроков. Каждый выбранный получит +1 балл.</p>
+          <p class="winners-note">
+            Отметьте одного или нескольких игроков. Каждый выбранный получит +1 балл.
+          </p>
           <div class="winners-list">
             <button
               v-for="p in selectablePlayers"
@@ -234,7 +303,7 @@
               class="winner-chip"
               :class="{ selected: selectedWinners.includes(p.id) }"
               @click="toggleWinner(p.id)"
-              :title="(guesses[p.id] || 'нет ответа')"
+              :title="guesses[p.id] || 'нет ответа'"
             >
               <span class="winner-chip__name">{{ p.nickname }}</span>
               <span class="winner-chip__guess">{{ guesses[p.id] || 'нет ответа' }}</span>
@@ -242,17 +311,27 @@
             </button>
           </div>
           <div class="winners-actions">
-            <button class="btn-primary winners-confirm" :disabled="selectedWinners.length === 0" @click="onSendWinners">
+            <button
+              class="btn-primary winners-confirm"
+              :disabled="selectedWinners.length === 0"
+              @click="onSendWinners"
+            >
               Подтвердить выбор ({{ selectedWinners.length }})
             </button>
-            <button class="btn-secondary winners-none" :disabled="selectedWinners.length > 0" @click="onSendNoWinners">
+            <button
+              class="btn-secondary winners-none"
+              :disabled="selectedWinners.length > 0"
+              @click="onSendNoWinners"
+            >
               Никто не угадал
             </button>
           </div>
         </div>
 
         <div v-else class="winners-wait">
-          <p class="wait-note">Ожидаем, пока <strong>{{ currentTurnName }}</strong> выберет победителей...</p>
+          <p class="wait-note">
+            Ожидаем, пока <strong>{{ currentTurnName }}</strong> выберет победителей...
+          </p>
           <ul class="winners-answers">
             <li v-for="p in players" :key="p.id">
               <strong>{{ p.nickname }}</strong>
@@ -270,11 +349,18 @@
       </div>
 
       <!-- Результаты -->
-      <div v-else-if="phase === 'results' || phase === 'advanced_results'" class="results-block">
+      <div
+        v-else-if="phase === 'results' || phase === 'advanced_results'"
+        class="results-block"
+        data-testid="phase-results"
+      >
         <h2>Результаты раунда</h2>
 
         <!-- Дублируем текущий вопрос в фазе advanced_results -->
-        <div v-if="phase === 'advanced_results' && currentQuestion" class="question-card question-card--large">
+        <div
+          v-if="phase === 'advanced_results' && currentQuestion"
+          class="question-card question-card--large"
+        >
           {{ currentQuestion }}
         </div>
 
@@ -282,10 +368,7 @@
           Ответ: <strong>{{ advancedAnswer }}</strong>
         </div>
         <div class="results-table-wrapper" v-if="voteCounts">
-          <table
-            v-if="phase === 'results'"
-            class="results-table"
-          >
+          <table v-if="phase === 'results'" class="results-table">
             <thead>
               <tr>
                 <th>Игрок</th>
@@ -305,10 +388,7 @@
               </tr>
             </tbody>
           </table>
-          <table
-            v-else
-            class="results-table"
-          >
+          <table v-else class="results-table">
             <thead>
               <tr>
                 <th>Игрок</th>
@@ -327,7 +407,7 @@
             </tbody>
           </table>
         </div>
-        <button class="next-round-btn" @click="onFinishRound">Следующий раунд</button>
+        <button class="next-round-btn" @click="onFinishRound" data-testid="next-round-btn">Следующий раунд</button>
       </div>
 
       <!-- Конец игры -->
@@ -344,29 +424,29 @@
           <div class="results-table-wrapper">
             <table class="results-table">
               <thead>
-              <tr>
-                <th>Игрок</th>
-                <th>Очки</th>
-              </tr>
+                <tr>
+                  <th>Игрок</th>
+                  <th>Очки</th>
+                </tr>
               </thead>
               <tbody>
-              <tr v-for="p in players" :key="p.id">
-                <td class="col-name">
-                  <span class="name-with-status">
-                    <span class="name-text">{{ p.nickname }}</span>
-                    <span
-                      v-if="roundStatusText(p.id) !== '—'"
-                      class="status-pill"
-                      :class="roundStatusClass(p.id)"
-                      :title="roundStatusTitle(p.id)"
-                      aria-hidden="true"
-                    >
-                      {{ roundStatusIcon(p.id) }}
+                <tr v-for="p in players" :key="p.id">
+                  <td class="col-name">
+                    <span class="name-with-status">
+                      <span class="name-text">{{ p.nickname }}</span>
+                      <span
+                        v-if="roundStatusText(p.id) !== '—'"
+                        class="status-pill"
+                        :class="roundStatusClass(p.id)"
+                        :title="roundStatusTitle(p.id)"
+                        aria-hidden="true"
+                      >
+                        {{ roundStatusIcon(p.id) }}
+                      </span>
                     </span>
-                  </span>
-                </td>
-                <td class="col-total">{{ scores[String(p.id)] ?? 0 }}</td>
-              </tr>
+                  </td>
+                  <td class="col-total">{{ scores[String(p.id)] ?? 0 }}</td>
+                </tr>
               </tbody>
             </table>
           </div>
@@ -385,7 +465,7 @@
           </button>
         </div>
 
-        <div class="game-info">
+        <div class="game-info" data-testid="game-state">
           <p class="players-count">
             Игроков: {{ players.length }} • Я: {{ myNickname }} (ID: {{ myIdShort }}) •
             {{ isHost ? 'Хост' : 'Клиент' }}
@@ -398,9 +478,10 @@
               Код комнаты: <strong>{{ roomId }}</strong>
             </div>
           </div>
-          <p class="instruction">
-            Режим: {{ gameMode }} • Фаза: {{ phaseLabel }}
-          </p>
+          <p class="instruction">Режим: {{ gameMode }} • Фаза: {{ phaseLabel }}</p>
+
+          <!-- Всегда доступный JSON-снимок состояния для e2e (визуально скрыт, но есть в DOM-тексте) -->
+          <pre class="visually-hidden game-state-json">{{ debugJson }}</pre>
 
           <!-- Debug panel -->
           <div v-if="isDebug" class="debug-panel">
@@ -421,10 +502,10 @@
 </template>
 
 <script setup lang="ts">
-import {ref, computed, watch, onUnmounted} from 'vue'
-import {useRouter} from 'vue-router'
-import {useGameStore} from '@/stores/gameStore'
-import { peerService } from '@/services/peerService'
+import { ref, computed, watch, onUnmounted } from 'vue'
+import { useRouter } from 'vue-router'
+import { useGameStore } from '@/stores/gameStore'
+import { peerService } from '@/services/peerSelector'
 import { isDebugEnabled, DEBUG_FLAG_EVENT } from '@/utils/debug'
 
 const router = useRouter()
@@ -436,10 +517,11 @@ if (typeof window !== 'undefined') {
   const onDebugEvent = (e: Event) => {
     // detail.enabled может отсутствовать — в этом случае читаем текущее из isDebugEnabled()
     const ce = e as CustomEvent | undefined
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const enabled = (ce && (ce as any).detail && typeof (ce as any).detail.enabled === 'boolean')
-      ? (ce as any).detail.enabled as boolean
-      : undefined
+
+    const enabled =
+      ce && (ce as any).detail && typeof (ce as any).detail.enabled === 'boolean'
+        ? ((ce as any).detail.enabled as boolean)
+        : undefined
     isDebug.value = typeof enabled === 'boolean' ? enabled : isDebugEnabled()
   }
   window.addEventListener(DEBUG_FLAG_EVENT, onDebugEvent)
@@ -460,17 +542,15 @@ const debugPayload = computed(() => {
   // Берём минимально запрошенный срез
   return {
     state: gameStore.gameState,
-    peers: peerService?.getActiveConnections
-      ? peerService.getActiveConnections()
-      : [],
-    allKnownPeers: peerService?.getAllKnownPeers
-      ? peerService.getAllKnownPeers()
-      : [],
+    peers: peerService?.getActiveConnections ? peerService.getActiveConnections() : [],
+    allKnownPeers: peerService?.getAllKnownPeers ? peerService.getAllKnownPeers() : [],
     role: peerService?.getCurrentRole
       ? peerService.getCurrentRole()
-      : (gameStore.isHost ? 'host' : 'client'),
+      : gameStore.isHost
+        ? 'host'
+        : 'client',
     myId: (gameStore.myPlayerId as string) || '',
-    roomId: (gameStore.gameState.roomId as string) || ''
+    roomId: (gameStore.gameState.roomId as string) || '',
   }
 })
 const debugJson = computed(() => {
@@ -480,6 +560,7 @@ const debugJson = computed(() => {
     return 'Failed to stringify debug payload'
   }
 })
+
 async function copyDebug() {
   try {
     await navigator.clipboard.writeText(debugJson.value)
@@ -503,7 +584,11 @@ const phase = computed(() => {
   }
   return savedPhase || 'lobby'
 })
-const gameMode = computed(() => (gameStore.gameState.gameMode as 'basic' | 'advanced' | undefined) || (gameStore.gameMode as 'basic' | 'advanced'))
+const gameMode = computed(
+  () =>
+    (gameStore.gameState.gameMode as 'basic' | 'advanced' | undefined) ||
+    (gameStore.gameMode as 'basic' | 'advanced'),
+)
 const players = computed(() => gameStore.gameState.players)
 const roomId = computed(() => gameStore.gameState.roomId)
 const myId = computed(() => gameStore.myPlayerId as string)
@@ -514,16 +599,35 @@ const canStartBasic = computed(() => {
   return gameStore.canStartGame as boolean
 })
 const currentTurnIndex = computed(() => (gameStore.gameState.currentTurn ?? 0) as number)
-const currentTurnPlayerId = computed(() => (gameStore.gameState.currentTurnPlayerId ?? (players.value[currentTurnIndex.value]?.id ?? null)) as string | null)
-const currentTurnName = computed(() => players.value.find(p => p.id === currentTurnPlayerId.value)?.nickname || '—')
+const currentTurnPlayerId = computed(
+  () =>
+    (gameStore.gameState.currentTurnPlayerId ??
+      players.value[currentTurnIndex.value]?.id ??
+      null) as string | null,
+)
+const currentTurnName = computed(
+  () => players.value.find((p) => p.id === currentTurnPlayerId.value)?.nickname || '—',
+)
 
 // Данные раундов
-const currentQuestion = computed(() => gameStore.gameState.currentQuestion as string | null | undefined)
-const votes = computed<Record<string, string[]>>(() => (gameStore.gameState.votes || {}) as Record<string, string[]>)
-const bets = computed<Record<string, '0' | '±' | '+'>>(() => (gameStore.gameState.bets || {}) as Record<string, '0' | '±' | '+'>)
-const scores = computed<Record<string, number>>(() => (gameStore.gameState.scores || {}) as Record<string, number>)
-const roundScores = computed<Record<string, number>>(() => (gameStore.gameState.roundScores || {}) as Record<string, number>)
-const guesses = computed<Record<string, string>>(() => (gameStore.gameState.guesses || {}) as Record<string, string>)
+const currentQuestion = computed(
+  () => gameStore.gameState.currentQuestion as string | null | undefined,
+)
+const votes = computed<Record<string, string[]>>(
+  () => (gameStore.gameState.votes || {}) as Record<string, string[]>,
+)
+const bets = computed<Record<string, '0' | '±' | '+'>>(
+  () => (gameStore.gameState.bets || {}) as Record<string, '0' | '±' | '+'>,
+)
+const scores = computed<Record<string, number>>(
+  () => (gameStore.gameState.scores || {}) as Record<string, number>,
+)
+const roundScores = computed<Record<string, number>>(
+  () => (gameStore.gameState.roundScores || {}) as Record<string, number>,
+)
+const guesses = computed<Record<string, string>>(
+  () => (gameStore.gameState.guesses || {}) as Record<string, string>,
+)
 // Утилиты статуса текущего раунда для таблицы очков
 const roundStatusText = (pid: string) => {
   // drawing_question: явно ждем текущего игрока
@@ -540,10 +644,13 @@ const roundStatusText = (pid: string) => {
   if (phase.value === 'answering' && answeringPlayerId.value === pid) return 'Отвечает'
   // advanced: если игрок не автор ответа и уже отправил догадку
   if (phase.value === 'guessing' && guesses.value[pid]) return 'Догадка отправлена'
-  if (phase.value === 'guessing' && !guesses.value[pid] && pid !== (answeringPlayerId.value ?? '')) return 'Ждем догадку'
+  if (phase.value === 'guessing' && !guesses.value[pid] && pid !== (answeringPlayerId.value ?? ''))
+    return 'Ждем догадку'
   // basic: голосование — отметим тех, кто проголосовал
-  if ((phase.value === 'voting' || phase.value === 'secret_voting') && votes.value[pid]) return 'Проголосовал'
-  if ((phase.value === 'voting' || phase.value === 'secret_voting') && !votes.value[pid]) return 'Ждем голос'
+  if ((phase.value === 'voting' || phase.value === 'secret_voting') && votes.value[pid])
+    return 'Проголосовал'
+  if ((phase.value === 'voting' || phase.value === 'secret_voting') && !votes.value[pid])
+    return 'Ждем голос'
   // basic: ставки
   if (phase.value === 'betting' && bets.value[pid]) return 'Ставка сделана'
   if (phase.value === 'betting' && !bets.value[pid]) return 'Ждем ставку'
@@ -555,7 +662,8 @@ const roundStatusClass = (pid: string) => {
   if (t === 'Ждем ход') return 'status-wait'
   /* selecting_winners */
   /* "Ждем ход" уже помечаем как status-wait; для остальных пусто */
-  if (t === 'Проголосовал' || t === 'Ставка сделана' || t === 'Догадка отправлена') return 'status-done'
+  if (t === 'Проголосовал' || t === 'Ставка сделана' || t === 'Догадка отправлена')
+    return 'status-done'
   if (t === 'Ждем голос' || t === 'Ждем ставку' || t === 'Ждем догадку') return 'status-wait'
   if (t === 'Отвечает') return 'status-active'
   return 'status-neutral'
@@ -573,8 +681,12 @@ const roundStatusTitle = (pid: string) => {
   const t = roundStatusText(pid)
   return t === '—' ? `Фаза: ${phaseLabel.value}` : `Фаза: ${phaseLabel.value} — ${t}`
 }
-const voteCounts = computed<Record<string, number>>(() => (gameStore.gameState.voteCounts || {}) as Record<string, number>)
-const answeringPlayerId = computed(() => (gameStore.gameState.answeringPlayerId ?? null) as string | null)
+const voteCounts = computed<Record<string, number>>(
+  () => (gameStore.gameState.voteCounts || {}) as Record<string, number>,
+)
+const answeringPlayerId = computed(
+  () => (gameStore.gameState.answeringPlayerId ?? null) as string | null,
+)
 const advancedAnswer = computed(() => (gameStore.gameState.advancedAnswer || '') as string)
 
 // Локальные состояния
@@ -591,9 +703,13 @@ const alreadyGuessed = computed(() => !!guesses.value[myId.value])
 // Роли
 const otherPlayers = computed(() => players.value.filter((p: any) => p.id !== myId.value))
 const isMyTurn = computed(() => currentTurnPlayerId.value === myId.value)
-const isAnswering = computed(() => !!answeringPlayerId.value && answeringPlayerId.value === myId.value)
+const isAnswering = computed(
+  () => !!answeringPlayerId.value && answeringPlayerId.value === myId.value,
+)
 const isChooser = computed(() => myId.value === (answeringPlayerId.value ?? ''))
-const answeringName = computed(() => players.value.find((p: any) => p.id === answeringPlayerId.value)?.nickname || '—')
+const answeringName = computed(
+  () => players.value.find((p: any) => p.id === answeringPlayerId.value)?.nickname || '—',
+)
 
 // Тексты состояния соединения
 const connectionStatusText = computed(() => {
@@ -621,13 +737,15 @@ const connectionStatusClass = computed(() => {
   }
 })
 
-const myIdShort = computed(() => myId.value ? myId.value.slice(0, 6) : '—')
-const myNickname = computed(() => players.value.find(p => p.id === myId.value)?.nickname || '—')
+const myIdShort = computed(() => (myId.value ? myId.value.slice(0, 6) : '—'))
+const myNickname = computed(() => players.value.find((p) => p.id === myId.value)?.nickname || '—')
 const phaseLabel = computed(() => phase.value)
 
 // Доступности
 const isVoteDisabled = (pid: string) =>
-  alreadyVoted.value || (selectedVotes.value.length >= 2 && !selectedVotes.value.includes(pid)) || pid === myId.value
+  alreadyVoted.value ||
+  (selectedVotes.value.length >= 2 && !selectedVotes.value.includes(pid)) ||
+  pid === myId.value
 
 // Хэндлеры действий — используем клиентские обертки стора
 const startBasic = () => {
@@ -654,7 +772,7 @@ const onToggleVote = (id: string) => {
   if (alreadyVoted.value) return
   if (id === myId.value) return
   if (selectedVotes.value.includes(id)) {
-    selectedVotes.value = selectedVotes.value.filter(x => x !== id)
+    selectedVotes.value = selectedVotes.value.filter((x) => x !== id)
   } else if (selectedVotes.value.length < 2) {
     selectedVotes.value.push(id)
   }
@@ -689,6 +807,7 @@ watch(phase, (ph) => {
   }
 })
 import { onMounted } from 'vue'
+
 onMounted(() => {
   if (phase.value === 'selecting_winners') {
     selectedWinners.value = []
@@ -696,16 +815,14 @@ onMounted(() => {
 })
 const selectablePlayers = computed(() =>
   // Только игроки, у которых есть guess, исключая автора ответа (chooser) и самого себя (на клиенте)
-  players.value.filter(p =>
-    p.id !== (answeringPlayerId.value ?? '') &&
-    p.id !== myId.value &&
-    !!guesses.value[p.id]
-  )
+  players.value.filter(
+    (p) => p.id !== (answeringPlayerId.value ?? '') && p.id !== myId.value && !!guesses.value[p.id],
+  ),
 )
 const toggleWinner = (pid: string) => {
   if (!isChooser.value) return
   if (selectedWinners.value.includes(pid)) {
-    selectedWinners.value = selectedWinners.value.filter(id => id !== pid)
+    selectedWinners.value = selectedWinners.value.filter((id) => id !== pid)
   } else {
     selectedWinners.value.push(pid)
   }
@@ -745,13 +862,13 @@ function onForceContinue(): void {
   // Используем публичный API forceContinue(), который внутри вызывает finishRoundHostOnly(true)
   // Это гарантирует переход даже если не все ставки/действия сделаны.
   if (typeof (gameStore as any).forceContinue === 'function') {
-    (gameStore as any).forceContinue(ph)
+    ;(gameStore as any).forceContinue(ph)
     return
   }
 
   // Fallback: если по каким-то причинам forceContinue недоступен, вызываем finishRound(true) напрямую (если экспортирован под этим именем).
   if (typeof (gameStore as any).finishRound === 'function') {
-    (gameStore as any).finishRound(true)
+    ;(gameStore as any).finishRound(true)
   }
 }
 
@@ -760,7 +877,6 @@ function onForceContinueWithConfirm(e?: Event): void {
   if (gameStore.connectionStatus !== 'connected') return
   if (!isHost.value) return
   try {
-    // eslint-disable-next-line no-alert
     const ok = confirm('Продолжить раунд, пропустив ожидающих игроков?')
     if (!ok) return
   } catch {
@@ -777,7 +893,7 @@ const leaveGame = () => {
 const winnerNameComputed = computed(() => {
   const allScores = scores.value || {}
   const max = Math.max(0, ...Object.values(allScores))
-  const winner = players.value.find(p => (allScores[p.id] || 0) === max)
+  const winner = players.value.find((p) => (allScores[p.id] || 0) === max)
   return winner ? winner.nickname : '—'
 })
 
@@ -795,11 +911,14 @@ watch(phase, () => {
 })
 
 // Если сессия невалидна — уходим в меню
-watch([() => gameStore.gameState.gameStarted, myId], ([started, id]: [boolean | undefined, string]) => {
-  if (!started || !id) {
-    // не редиректим агрессивно, пусть остается на экране лобби
-  }
-})
+watch(
+  [() => gameStore.gameState.gameStarted, myId],
+  ([started, id]: [boolean | undefined, string]) => {
+    if (!started || !id) {
+      // не редиректим агрессивно, пусть остается на экране лобби
+    }
+  },
+)
 </script>
 
 <style scoped>
@@ -926,6 +1045,7 @@ watch([() => gameStore.gameState.gameStarted, myId], ([started, id]: [boolean | 
   border-radius: 10px;
   padding: 8px;
 }
+
 .debug-actions {
   display: flex;
   align-items: center;
@@ -944,41 +1064,54 @@ watch([() => gameStore.gameState.gameStarted, myId], ([started, id]: [boolean | 
   padding: 8px 12px;
   border-radius: 10px;
   cursor: pointer;
-  transition: transform 0.12s ease, box-shadow 0.2s ease, border-color 0.2s ease, background 0.2s ease, color 0.2s ease;
+  transition:
+    transform 0.12s ease,
+    box-shadow 0.2s ease,
+    border-color 0.2s ease,
+    background 0.2s ease,
+    color 0.2s ease;
   display: inline-flex;
   align-items: center;
   gap: 8px;
 }
+
 .btn-debug::before {
-  content: "⧉";
+  content: '⧉';
   font-size: 0.95rem;
   line-height: 1;
 }
+
 .btn-debug:hover {
   transform: translateY(-1px);
   box-shadow: 0 6px 14px rgba(30, 64, 175, 0.12);
   border-color: #bcd6ff;
   background: linear-gradient(135deg, #eaf3ff 0%, #e3eeff 100%);
 }
+
 .btn-debug:active {
   transform: translateY(0);
   box-shadow: 0 4px 10px rgba(30, 64, 175, 0.12) inset;
 }
+
 .btn-debug:focus {
   outline: none;
   box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.25);
 }
+
 .btn-debug:disabled {
   opacity: 0.6;
   cursor: not-allowed;
 }
+
 .copy-status {
   color: #166534;
   font-weight: 700;
 }
+
 .copy-hint {
   color: #64748b;
 }
+
 .debug-pre {
   margin: 0;
   max-height: 180px;
@@ -1025,12 +1158,15 @@ watch([() => gameStore.gameState.gameStarted, myId], ([started, id]: [boolean | 
 .player-square.lit-up {
   animation: lightUp 0.5s ease-in-out;
   transform: scale(1.05);
-  box-shadow: 0 0 30px currentColor, 0 0 60px currentColor;
+  box-shadow:
+    0 0 30px currentColor,
+    0 0 60px currentColor;
   z-index: 10;
 }
 
 @keyframes lightUp {
-  0%, 100% {
+  0%,
+  100% {
     transform: scale(1);
   }
   50% {
@@ -1076,7 +1212,8 @@ watch([() => gameStore.gameState.gameStarted, myId], ([started, id]: [boolean | 
 }
 
 @keyframes pulse {
-  0%, 100% {
+  0%,
+  100% {
     opacity: 0.3;
     transform: scale(1);
   }
@@ -1149,6 +1286,7 @@ watch([() => gameStore.gameState.gameStarted, myId], ([started, id]: [boolean | 
   gap: 8px;
   align-items: center;
 }
+
 .help-btn {
   width: 44px;
   height: 44px;
@@ -1163,18 +1301,25 @@ watch([() => gameStore.gameState.gameStarted, myId], ([started, id]: [boolean | 
   align-items: center;
   justify-content: center;
   text-decoration: none;
-  transition: transform 0.12s ease, box-shadow 0.2s ease, border-color 0.2s ease, background 0.2s ease;
+  transition:
+    transform 0.12s ease,
+    box-shadow 0.2s ease,
+    border-color 0.2s ease,
+    background 0.2s ease;
 }
+
 .help-btn:hover {
   transform: translateY(-1px);
   box-shadow: 0 6px 14px rgba(30, 60, 114, 0.08);
   border-color: #dbe6f3;
   background: #ffffff;
 }
+
 /* Стили для конверта, наследуем оформление help-btn */
 .envelope-btn {
   padding: 0;
 }
+
 .envelope-icon {
   width: 22px;
   height: 22px;
@@ -1192,6 +1337,7 @@ watch([() => gameStore.gameState.gameStarted, myId], ([started, id]: [boolean | 
   padding: 16px;
   z-index: 1000;
 }
+
 .modal {
   width: min(900px, 100%);
   background: #fff;
@@ -1202,6 +1348,7 @@ watch([() => gameStore.gameState.gameStarted, myId], ([started, id]: [boolean | 
   flex-direction: column;
   max-height: 80vh;
 }
+
 .modal-header {
   display: flex;
   align-items: center;
@@ -1209,9 +1356,11 @@ watch([() => gameStore.gameState.gameStarted, myId], ([started, id]: [boolean | 
   padding: 12px 16px;
   border-bottom: 1px solid #eef2f7;
 }
+
 .modal-header h3 {
   margin: 0;
 }
+
 .modal-close {
   width: 36px;
   height: 36px;
@@ -1223,6 +1372,7 @@ watch([() => gameStore.gameState.gameStarted, myId], ([started, id]: [boolean | 
   font-weight: 800;
   cursor: pointer;
 }
+
 .modal-content {
   padding: 12px 16px;
   overflow: auto;
@@ -1234,64 +1384,83 @@ watch([() => gameStore.gameState.gameStarted, myId], ([started, id]: [boolean | 
   gap: 12px;
   color: #0f172a;
 }
+
 .rules__header {
   display: grid;
   gap: 6px;
   padding: 4px 0 8px;
   border-bottom: 1px solid #eef2f7;
 }
+
 .rules__title {
   margin: 0;
   font-size: 1.15rem;
   font-weight: 800;
   letter-spacing: 0.2px;
 }
+
 .rules__subtitle {
   margin: 0;
   color: #475569;
   font-size: 0.95rem;
 }
+
 .rules__section {
   display: grid;
   gap: 6px;
 }
+
 .rules__h {
   margin: 0;
   font-size: 1rem;
   font-weight: 800;
   color: #1f2937;
 }
+
 .rules__p {
   margin: 0;
   line-height: 1.5;
 }
+
 .rules__list {
   margin: 0;
   padding-left: 18px;
   line-height: 1.5;
 }
+
 .rules__bullets {
   margin: 0;
   padding-left: 18px;
   line-height: 1.5;
   list-style: disc;
 }
+
 .rules strong {
   font-weight: 800;
 }
 
 /* Адаптивность текста правил */
 @media (max-width: 560px) {
-  .rules__title { font-size: 1.05rem; }
-  .rules__subtitle { font-size: 0.9rem; }
-  .rules__h { font-size: 0.98rem; }
+  .rules__title {
+    font-size: 1.05rem;
+  }
+
+  .rules__subtitle {
+    font-size: 0.9rem;
+  }
+
+  .rules__h {
+    font-size: 0.98rem;
+  }
 }
+
 .modal-footer {
   padding: 12px 16px;
   border-top: 1px solid #eef2f7;
   display: flex;
   justify-content: flex-end;
 }
+
 .modal-footer .btn-primary {
   background: linear-gradient(135deg, #60a5fa 0%, #3b82f6 100%);
   color: #fff;
@@ -1339,7 +1508,11 @@ watch([() => gameStore.gameState.gameStarted, myId], ([started, id]: [boolean | 
   background: #ffffff;
   color: #2c3e50;
   font-weight: 600;
-  transition: transform 0.12s ease, box-shadow 0.2s ease, border-color 0.2s ease, background 0.2s ease;
+  transition:
+    transform 0.12s ease,
+    box-shadow 0.2s ease,
+    border-color 0.2s ease,
+    background 0.2s ease;
   cursor: pointer;
 }
 
@@ -1392,6 +1565,7 @@ watch([() => gameStore.gameState.gameStarted, myId], ([started, id]: [boolean | 
   justify-content: flex-end;
   margin-bottom: 8px;
 }
+
 .btn-continue {
   appearance: none;
   border: 1px solid #fde3b1;
@@ -1402,22 +1576,31 @@ watch([() => gameStore.gameState.gameStarted, myId], ([started, id]: [boolean | 
   padding: 8px 12px;
   border-radius: 10px;
   cursor: pointer;
-  transition: transform 0.12s ease, box-shadow 0.2s ease, border-color 0.2s ease, background 0.2s ease, color 0.2s ease;
+  transition:
+    transform 0.12s ease,
+    box-shadow 0.2s ease,
+    border-color 0.2s ease,
+    background 0.2s ease,
+    color 0.2s ease;
 }
+
 .btn-continue:hover:not(:disabled) {
   transform: translateY(-1px);
   box-shadow: 0 6px 14px rgba(133, 77, 14, 0.12);
   border-color: #fbd38d;
   background: linear-gradient(135deg, #ffefd1 0%, #ffe2ad 100%);
 }
+
 .btn-continue:active {
   transform: translateY(0);
   box-shadow: 0 4px 10px rgba(133, 77, 14, 0.12) inset;
 }
+
 .btn-continue:focus {
   outline: none;
   box-shadow: 0 0 0 3px rgba(251, 191, 36, 0.3);
 }
+
 .btn-continue:disabled {
   opacity: 0.6;
   cursor: not-allowed;
@@ -1430,9 +1613,11 @@ watch([() => gameStore.gameState.gameStarted, myId], ([started, id]: [boolean | 
   justify-items: end;
   gap: 4px;
 }
+
 .btn-continue--global {
   padding: 10px 14px;
 }
+
 .continue-hint {
   color: #64748b;
   font-size: 0.85rem;
@@ -1446,7 +1631,10 @@ watch([() => gameStore.gameState.gameStarted, myId], ([started, id]: [boolean | 
   border-radius: 12px;
   font-weight: 800;
   cursor: pointer;
-  transition: transform 0.12s ease, box-shadow 0.2s ease, filter 0.2s ease;
+  transition:
+    transform 0.12s ease,
+    box-shadow 0.2s ease,
+    filter 0.2s ease;
   box-shadow: 0 6px 14px rgba(22, 163, 74, 0.18);
 }
 
@@ -1551,7 +1739,10 @@ watch([() => gameStore.gameState.gameStarted, myId], ([started, id]: [boolean | 
   border-radius: 12px;
   font-weight: 700;
   cursor: pointer;
-  transition: transform 0.15s ease, box-shadow 0.2s ease, filter 0.2s ease;
+  transition:
+    transform 0.15s ease,
+    box-shadow 0.2s ease,
+    filter 0.2s ease;
   box-shadow: 0 6px 14px rgba(74, 105, 189, 0.25);
 }
 
@@ -1645,6 +1836,7 @@ watch([() => gameStore.gameState.gameStarted, myId], ([started, id]: [boolean | 
   border-radius: 14px;
   padding: 16px;
 }
+
 .answering-header {
   display: flex;
   align-items: baseline;
@@ -1652,14 +1844,17 @@ watch([() => gameStore.gameState.gameStarted, myId], ([started, id]: [boolean | 
   gap: 12px;
   margin-bottom: 10px;
 }
+
 .answering-hint {
   color: #667085;
   font-size: 0.95rem;
 }
+
 .answering-content {
   display: grid;
   gap: 10px;
 }
+
 .answering-textarea {
   width: 100%;
   min-height: 110px;
@@ -1670,17 +1865,22 @@ watch([() => gameStore.gameState.gameStarted, myId], ([started, id]: [boolean | 
   background: #ffffff;
   font-size: 1rem;
   line-height: 1.4;
-  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  transition:
+    border-color 0.2s ease,
+    box-shadow 0.2s ease;
 }
+
 .answering-textarea:focus {
   outline: none;
   border-color: #98b7ff;
   box-shadow: 0 0 0 3px rgba(152, 183, 255, 0.25);
 }
+
 .answering-actions {
   display: flex;
   justify-content: flex-end;
 }
+
 .btn-primary.answering-submit {
   background: linear-gradient(135deg, #60a5fa 0%, #3b82f6 100%);
   color: #fff;
@@ -1689,18 +1889,24 @@ watch([() => gameStore.gameState.gameStarted, myId], ([started, id]: [boolean | 
   border-radius: 12px;
   font-weight: 800;
   cursor: pointer;
-  transition: transform 0.12s ease, box-shadow 0.2s ease, filter 0.2s ease;
+  transition:
+    transform 0.12s ease,
+    box-shadow 0.2s ease,
+    filter 0.2s ease;
   box-shadow: 0 6px 14px rgba(59, 130, 246, 0.18);
 }
+
 .btn-primary.answering-submit:hover:not(:disabled) {
   transform: translateY(-1px);
   box-shadow: 0 8px 18px rgba(59, 130, 246, 0.26);
 }
+
 .btn-primary.answering-submit:disabled {
   opacity: 0.6;
   filter: grayscale(0.1);
   cursor: not-allowed;
 }
+
 .answering-wait .wait-note {
   color: #667085;
   font-size: 0.95rem;
@@ -1714,6 +1920,7 @@ watch([() => gameStore.gameState.gameStarted, myId], ([started, id]: [boolean | 
   border-radius: 14px;
   padding: 16px;
 }
+
 .guessing-header {
   display: flex;
   align-items: baseline;
@@ -1721,14 +1928,17 @@ watch([() => gameStore.gameState.gameStarted, myId], ([started, id]: [boolean | 
   gap: 12px;
   margin-bottom: 10px;
 }
+
 .guessing-hint {
   color: #667085;
   font-size: 0.95rem;
 }
+
 .guessing-content {
   display: grid;
   gap: 10px;
 }
+
 .guessing-textarea {
   width: 100%;
   min-height: 90px;
@@ -1739,19 +1949,24 @@ watch([() => gameStore.gameState.gameStarted, myId], ([started, id]: [boolean | 
   background: #ffffff;
   font-size: 1rem;
   line-height: 1.4;
-  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  transition:
+    border-color 0.2s ease,
+    box-shadow 0.2s ease;
 }
+
 .guessing-textarea:focus {
   outline: none;
   border-color: #98b7ff;
   box-shadow: 0 0 0 3px rgba(152, 183, 255, 0.25);
 }
+
 .guessing-actions {
   display: flex;
   align-items: center;
   gap: 10px;
   justify-content: flex-end;
 }
+
 .btn-primary.guessing-submit {
   background: linear-gradient(135deg, #34d399 0%, #10b981 100%);
   color: #fff;
@@ -1760,22 +1975,29 @@ watch([() => gameStore.gameState.gameStarted, myId], ([started, id]: [boolean | 
   border-radius: 12px;
   font-weight: 800;
   cursor: pointer;
-  transition: transform 0.12s ease, box-shadow 0.2s ease, filter 0.2s ease;
+  transition:
+    transform 0.12s ease,
+    box-shadow 0.2s ease,
+    filter 0.2s ease;
   box-shadow: 0 6px 14px rgba(16, 185, 129, 0.18);
 }
+
 .btn-primary.guessing-submit:hover:not(:disabled) {
   transform: translateY(-1px);
   box-shadow: 0 8px 18px rgba(16, 185, 129, 0.26);
 }
+
 .btn-primary.guessing-submit:disabled {
   opacity: 0.6;
   filter: grayscale(0.1);
   cursor: not-allowed;
 }
+
 .guess-note {
   color: #667085;
   font-size: 0.95rem;
 }
+
 .guessing-wait .wait-note {
   color: #667085;
   font-size: 0.95rem;
@@ -1790,21 +2012,25 @@ watch([() => gameStore.gameState.gameStarted, myId], ([started, id]: [boolean | 
   border-radius: 12px;
   background: #ffffff;
 }
+
 .author-answer__label {
   font-size: 0.9rem;
   color: #64748b;
   margin-bottom: 6px;
 }
+
 .author-answer__text {
   font-weight: 700;
   color: #0f172a;
   line-height: 1.35;
   white-space: pre-wrap;
 }
+
 @media (max-width: 560px) {
   .author-answer {
     padding: 8px 10px;
   }
+
   .author-answer__text {
     font-size: 0.95rem;
   }
@@ -1816,6 +2042,7 @@ watch([() => gameStore.gameState.gameStarted, myId], ([started, id]: [boolean | 
   gap: 4px;
   align-items: center;
 }
+
 .wait-bubble .dot {
   width: 6px;
   height: 6px;
@@ -1823,11 +2050,26 @@ watch([() => gameStore.gameState.gameStarted, myId], ([started, id]: [boolean | 
   background: #a5b4fc;
   animation: dotBlink 1.4s infinite ease-in-out;
 }
-.wait-bubble .dot:nth-child(2) { animation-delay: 0.2s; }
-.wait-bubble .dot:nth-child(3) { animation-delay: 0.4s; }
+
+.wait-bubble .dot:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.wait-bubble .dot:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
 @keyframes dotBlink {
-  0%, 80%, 100% { opacity: 0.2; transform: translateY(0); }
-  40% { opacity: 1; transform: translateY(-2px); }
+  0%,
+  80%,
+  100% {
+    opacity: 0.2;
+    transform: translateY(0);
+  }
+  40% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
 }
 
 /* Ставка */
@@ -1852,7 +2094,7 @@ watch([() => gameStore.gameState.gameStarted, myId], ([started, id]: [boolean | 
 }
 
 /* 3 в ряд через CSS Grid + разноцветные варианты и ховеры */
-.bet-cards {
+.players-list-bet {
   margin: 10px 0 14px;
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -1873,7 +2115,12 @@ watch([() => gameStore.gameState.gameStarted, myId], ([started, id]: [boolean | 
   letter-spacing: 0.5px;
   cursor: pointer !important; /* принудительно указываем pointer */
   user-select: none;
-  transition: transform 0.12s ease, box-shadow 0.2s ease, border-color 0.2s ease, background 0.2s ease, color 0.2s ease;
+  transition:
+    transform 0.12s ease,
+    box-shadow 0.2s ease,
+    border-color 0.2s ease,
+    background 0.2s ease,
+    color 0.2s ease;
 }
 
 .bet-chip:hover:not(:disabled) {
@@ -1891,7 +2138,7 @@ watch([() => gameStore.gameState.gameStarted, myId], ([started, id]: [boolean | 
   box-shadow: 0 6px 14px rgba(36, 99, 235, 0.12);
 }
 
-.bet-chip  {
+.bet-chip {
   cursor: pointer;
 }
 
@@ -1966,13 +2213,13 @@ watch([() => gameStore.gameState.gameStarted, myId], ([started, id]: [boolean | 
 
 /* Адаптивная перегруппировка: 2 в ряд на средних, 1 в ряд на узких */
 @media (max-width: 720px) {
-  .bet-cards {
+  .players-list-bet {
     grid-template-columns: repeat(2, 1fr);
   }
 }
 
 @media (max-width: 420px) {
-  .bet-cards {
+  .players-list-bet {
     grid-template-columns: 1fr;
   }
 }
@@ -1991,7 +2238,10 @@ watch([() => gameStore.gameState.gameStarted, myId], ([started, id]: [boolean | 
   border-radius: 12px;
   font-weight: 800;
   cursor: pointer;
-  transition: transform 0.12s ease, box-shadow 0.2s ease, filter 0.2s ease;
+  transition:
+    transform 0.12s ease,
+    box-shadow 0.2s ease,
+    filter 0.2s ease;
   box-shadow: 0 6px 14px rgba(255, 95, 48, 0.2);
 }
 
@@ -2037,20 +2287,24 @@ watch([() => gameStore.gameState.gameStarted, myId], ([started, id]: [boolean | 
   font-weight: 700;
   text-align: right;
 }
+
 .col-status {
   white-space: nowrap;
 }
+
 .name-with-status {
   display: inline-flex;
   align-items: center;
   gap: 6px;
 }
+
 .name-text {
   max-width: 220px;
   text-overflow: ellipsis;
   white-space: nowrap;
   overflow: hidden;
 }
+
 .status-pill {
   display: inline-flex;
   align-items: center;
@@ -2064,21 +2318,25 @@ watch([() => gameStore.gameState.gameStarted, myId], ([started, id]: [boolean | 
   border: 1px solid transparent;
   line-height: 1;
 }
+
 .status-done {
   background: #e7f6ec;
   color: #166534;
   border-color: #bbebc8;
 }
+
 .status-wait {
   background: #fff4e0;
   color: #854d0e;
   border-color: #fde3b1;
 }
+
 .status-active {
   background: #e7f1ff;
   color: #1e40af;
   border-color: #cfe2ff;
 }
+
 .status-neutral {
   background: #f1f5f9;
   color: #334155;
@@ -2199,6 +2457,7 @@ watch([() => gameStore.gameState.gameStarted, myId], ([started, id]: [boolean | 
     align-items: stretch;
     text-align: center;
   }
+
   .name-text {
     max-width: 160px;
   }
@@ -2260,6 +2519,7 @@ watch([() => gameStore.gameState.gameStarted, myId], ([started, id]: [boolean | 
   border-radius: 14px;
   padding: 16px;
 }
+
 .winners-header {
   display: flex;
   align-items: baseline;
@@ -2267,20 +2527,24 @@ watch([() => gameStore.gameState.gameStarted, myId], ([started, id]: [boolean | 
   gap: 12px;
   margin-bottom: 10px;
 }
+
 .winners-hint {
   color: #667085;
   font-size: 0.95rem;
 }
+
 .winners-note {
   color: #667085;
   margin: 0 0 8px 0;
 }
+
 .winners-list {
   display: grid;
   grid-template-columns: 1fr;
   gap: 10px;
   margin-bottom: 10px;
 }
+
 .winner-chip {
   position: relative;
   display: grid;
@@ -2292,20 +2556,27 @@ watch([() => gameStore.gameState.gameStarted, myId], ([started, id]: [boolean | 
   border: 1px solid #e6ecf5;
   background: #ffffff;
   color: #2c3e50;
-  transition: transform 0.12s ease, box-shadow 0.2s ease, border-color 0.2s ease, background 0.2s ease;
+  transition:
+    transform 0.12s ease,
+    box-shadow 0.2s ease,
+    border-color 0.2s ease,
+    background 0.2s ease;
   cursor: pointer;
   text-align: left;
 }
+
 .winner-chip:hover {
   transform: translateY(-1px);
   box-shadow: 0 6px 14px rgba(30, 60, 114, 0.08);
   border-color: #dbe6f3;
 }
+
 .winner-chip.selected {
   background: #eef6ff;
   border-color: #cfe2ff;
   box-shadow: 0 6px 14px rgba(36, 99, 235, 0.12);
 }
+
 .winner-chip__name {
   font-weight: 700;
   min-width: 0;
@@ -2313,6 +2584,7 @@ watch([() => gameStore.gameState.gameStarted, myId], ([started, id]: [boolean | 
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
 .winner-chip__guess {
   min-width: 0;
   color: #475569;
@@ -2320,6 +2592,7 @@ watch([() => gameStore.gameState.gameStarted, myId], ([started, id]: [boolean | 
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
 /* Резервируем место под маркер, чтобы не было "прыжка" высоты при выборе */
 .winner-chip__marker {
   display: inline-flex;
@@ -2344,11 +2617,13 @@ watch([() => gameStore.gameState.gameStarted, myId], ([started, id]: [boolean | 
   color: #fff;
   border-color: #22c55e;
 }
+
 .winners-actions {
   display: flex;
   gap: 8px;
   margin-top: 6px;
 }
+
 .btn-primary.winners-confirm {
   background: linear-gradient(135deg, #4f46e5 0%, #3b82f6 100%);
   color: #fff;
@@ -2357,18 +2632,24 @@ watch([() => gameStore.gameState.gameStarted, myId], ([started, id]: [boolean | 
   border-radius: 12px;
   font-weight: 800;
   cursor: pointer;
-  transition: transform 0.12s ease, box-shadow 0.2s ease, filter 0.2s ease;
+  transition:
+    transform 0.12s ease,
+    box-shadow 0.2s ease,
+    filter 0.2s ease;
   box-shadow: 0 6px 14px rgba(59, 130, 246, 0.18);
 }
+
 .btn-primary.winners-confirm:hover:not(:disabled) {
   transform: translateY(-1px);
   box-shadow: 0 8px 18px rgba(59, 130, 246, 0.26);
 }
+
 .btn-primary.winners-confirm:disabled {
   opacity: 0.6;
   filter: grayscale(0.1);
   cursor: not-allowed;
 }
+
 .btn-secondary.winners-none {
   background: #f1f5f9;
   color: #334155;
@@ -2377,16 +2658,21 @@ watch([() => gameStore.gameState.gameStarted, myId], ([started, id]: [boolean | 
   border-radius: 12px;
   font-weight: 700;
   cursor: pointer;
-  transition: background 0.2s ease, border-color 0.2s ease;
+  transition:
+    background 0.2s ease,
+    border-color 0.2s ease;
 }
+
 .btn-secondary.winners-none:hover:not(:disabled) {
   background: #e9eef5;
   border-color: #dbe6f3;
 }
+
 .btn-secondary.winners-none:disabled {
   opacity: 0.7;
   cursor: not-allowed;
 }
+
 .winners-wait .winners-answers {
   margin: 8px 0 0 0;
   padding-left: 18px;
@@ -2397,16 +2683,28 @@ watch([() => gameStore.gameState.gameStarted, myId], ([started, id]: [boolean | 
 @media (max-width: 640px) {
   .winner-chip {
     grid-template-columns: 1fr auto;
-    grid-template-areas: "name marker" "guess guess";
+    grid-template-areas: 'name marker' 'guess guess';
     row-gap: 6px;
   }
-  .winner-chip__name { grid-area: name; }
-  .winner-chip__guess { grid-area: guess; white-space: normal; }
-  .winner-chip__marker { grid-area: marker; }
+
+  .winner-chip__name {
+    grid-area: name;
+  }
+
+  .winner-chip__guess {
+    grid-area: guess;
+    white-space: normal;
+  }
+
+  .winner-chip__marker {
+    grid-area: marker;
+  }
+
   .winners-actions {
     flex-direction: column;
     align-items: stretch;
   }
+
   .btn-primary.winners-confirm,
   .btn-secondary.winners-none {
     width: 100%;
@@ -2454,6 +2752,7 @@ watch([() => gameStore.gameState.gameStarted, myId], ([started, id]: [boolean | 
     font-size: 0.8rem;
   }
 }
+
 /* Глобальный popover переподключения */
 .global-reconnect-popover {
   position: fixed;
@@ -2464,14 +2763,16 @@ watch([() => gameStore.gameState.gameStarted, myId], ([started, id]: [boolean | 
   color: #f9fafb;
   border: 1px solid #334155;
   border-radius: 12px;
-  box-shadow: 0 12px 30px rgba(0,0,0,0.25);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.25);
   padding: 10px 14px;
 }
+
 .global-reconnect-popover .popover-content {
   display: inline-flex;
   align-items: center;
   gap: 10px;
 }
+
 .global-reconnect-popover .spinner {
   width: 12px;
   height: 12px;
@@ -2480,14 +2781,29 @@ watch([() => gameStore.gameState.gameStarted, myId], ([started, id]: [boolean | 
   border-radius: 50%;
   animation: spin 0.9s linear infinite;
 }
+
 .global-reconnect-popover .text {
   font-weight: 700;
   font-size: 0.95rem;
-  letter-spacing: .2px;
+  letter-spacing: 0.2px;
 }
+
 @keyframes spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 /* остальной CSS ниже */
+.visually-hidden {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip: rect(0, 0, 0, 0) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
+}
 </style>

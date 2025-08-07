@@ -38,9 +38,10 @@ export function isDebugEnabled(): boolean {
   const prefixedKey = (storageSafe as any).buildKey?.('', GLOBAL_DEBUG_KEY) as string | undefined
   if (prefixedKey) {
     try {
-      const raw = (typeof window !== 'undefined' && 'localStorage' in window)
-        ? window.localStorage.getItem(prefixedKey)
-        : null
+      const raw =
+        typeof window !== 'undefined' && 'localStorage' in window
+          ? window.localStorage.getItem(prefixedKey)
+          : null
       if (raw != null) {
         const v = normalize(raw)
         if (v && v !== '0' && v !== 'false' && v !== 'off') return true

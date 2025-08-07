@@ -13,54 +13,50 @@ const router = createRouter({
           return { name: 'Lobby', params: { hostId: room } }
         }
         return { name: 'MainMenu' }
-      }
+      },
     },
     {
       path: '/',
       name: 'MainMenu',
-      component: () => import('@/components/MainMenu.vue')
+      component: () => import('@/components/MainMenu.vue'),
     },
     {
       path: '/lobby/:hostId?',
       name: 'Lobby',
       component: () => import('@/components/Lobby.vue'),
-      props: true
+      props: true,
     },
     {
       path: '/game',
       name: 'Game',
-      component: () => import('@/components/GameField.vue')
-    }
+      component: () => import('@/components/GameField.vue'),
+    },
   ],
 })
 
-// Глобальный guard для восстановления и корректного роутинга после перезагрузки
 router.beforeEach(async (to, from, next) => {
   const store = useGameStore()
 
-  // Если сессия уже активна — направляем в актуальный экран
+  // Если уже подключены — направляем по состоянию
   const redirectAccordingToState = () => {
     const phase = (store.gameState.phase ?? 'lobby') as string
     const started = !!store.gameState.gameStarted
-    if (phase !== 'lobby' && started) {
-      if (to.name !== 'Game') {
-        return next({ name: 'Game' })
-      }
-      return next()
-    } else {
-      if (to.name !== 'Lobby' && to.name !== 'JoinRedirect' && to.name !== 'MainMenu') {
-        return next({ name: 'Lobby' })
-      }
+    // Разрешаем переход на игру, если ИГРА УЖЕ ЗАПУЩЕНА или если фаза уже не 'lobby' (устраняем гонку)
+    if (started || phase !== 'lobby') {
+      if (to.name !== 'Game') return next({ name: 'Game' })
       return next()
     }
+    // В состоянии lobby позволяем оставаться там, где пользователь уже находится (MainMenu/Lobby),
+    // не форсим переход в Lobby для страниц без активной сессии.
+    if (to.name === 'Game') return next({ name: 'Lobby' })
+    return next()
   }
 
-  // Если уже подключены — просто направляем по состоянию
   if (store.connectionStatus === 'connected') {
     return redirectAccordingToState()
   }
 
-  // Если не подключены, но есть сохраненная сессия — пробуем восстановить
+  // Если не подключены, но есть сохраненная сессия — пытаемся восстановить и только ПОСЛЕ успешного восстановления роутим
   if (store.hasActiveSession()) {
     try {
       const restored = await store.restoreSession()
@@ -68,11 +64,11 @@ router.beforeEach(async (to, from, next) => {
         return redirectAccordingToState()
       }
     } catch {
-      // проваливаемся в обычный поток
+      // игнорируем и идем дальше
     }
   }
 
-  // Нет активной сессии — разрешаем стандартную навигацию
+  // Нет активной сессии — не вмешиваемся в навигацию (даём тестам пройти create/join на MainMenu)
   return next()
 })
 
@@ -87,7 +83,8 @@ router.beforeEach(async (to) => {
 
     // Если уже есть активная сессия, а соединение в процессе восстановления
     if (store.hasActiveSession() && store.connectionStatus === 'connecting') {
-      const phase = store.gameState.phase ?? (store.gameState.gameStarted ? 'drawing_question' : 'lobby')
+      const phase =
+        store.gameState.phase ?? (store.gameState.gameStarted ? 'drawing_question' : 'lobby')
       if (phase !== 'lobby') {
         // Удерживаем на экране игры
         if (to.name !== 'Game') {
@@ -98,7 +95,8 @@ router.beforeEach(async (to) => {
 
     // Если подключены и игра шла — прямой переход на Game при попадании на корень
     if (to.name === 'MainMenu' && store.connectionStatus === 'connected') {
-      const phase = store.gameState.phase ?? (store.gameState.gameStarted ? 'drawing_question' : 'lobby')
+      const phase =
+        store.gameState.phase ?? (store.gameState.gameStarted ? 'drawing_question' : 'lobby')
       if (phase !== 'lobby') {
         return { name: 'Game' }
       }

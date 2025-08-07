@@ -5,11 +5,10 @@
         <h1 class="title">Провокатор</h1>
 
         <div class="header-actions">
-          <RulesDialog  />
+          <RulesDialog />
 
           <!-- Кнопка-конверт вынесена в отдельный компонент с дефолтной кнопкой и опциональным слотом -->
           <EnvelopeButton />
-
         </div>
       </div>
 
@@ -20,6 +19,7 @@
           <label for="nickname">Ваш никнейм:</label>
           <input
             id="nickname"
+            data-testid="nickname-input"
             v-model="gameStore.myNickname"
             type="text"
             placeholder="Введите никнейм"
@@ -31,6 +31,7 @@
         <button
           class="btn btn-primary btn-large"
           @click="createRoom"
+          data-testid="create-room-button"
           :disabled="!gameStore.myNickname.trim() || gameStore.connectionStatus === 'connecting'"
         >
           {{ gameStore.connectionStatus === 'connecting' ? 'Создание...' : 'Создать комнату' }}
@@ -51,6 +52,7 @@
               id="roomId"
               v-model="joinRoomId"
               type="text"
+              data-testid="join-room-input"
               placeholder="Введите ID комнаты"
               @keyup.enter="joinRoom"
             />
@@ -59,9 +61,14 @@
 
         <button
           class="btn btn-secondary btn-large"
-          style="margin-bottom: 12px;"
+          style="margin-bottom: 12px"
           @click="joinRoom"
-          :disabled="!gameStore.myNickname.trim() || !joinRoomId.trim() || gameStore.connectionStatus === 'connecting'"
+          data-testid="join-room-button"
+          :disabled="
+            !gameStore.myNickname.trim() ||
+            !joinRoomId.trim() ||
+            gameStore.connectionStatus === 'connecting'
+          "
         >
           {{ gameStore.connectionStatus === 'connecting' ? 'Подключение...' : 'Присоединиться' }}
         </button>
@@ -101,7 +108,7 @@ const joinRoomId = ref('')
 const errorMessage = ref('')
 const isRestoringSession = ref(false)
 
- // Проверяем, есть ли hostId в URL (переход по QR-коду) и сохраненная сессия
+// Проверяем, есть ли hostId в URL (переход по QR-коду) и сохраненная сессия
 onMounted(async () => {
   // Единственное допустимое прямое обращение к localStorage — никнейм под ключом 'nickname'
   const savedNickname = localStorage.getItem('nickname')
@@ -129,7 +136,9 @@ onMounted(async () => {
       if (restored) {
         console.log('Session restored successfully, redirecting...')
         // Редирект строго по фазе: lobby -> /lobby, иначе -> /game
-        const phase = gameStore.gameState.phase ?? (gameStore.gameState.gameStarted ? 'drawing_question' : 'lobby')
+        const phase =
+          gameStore.gameState.phase ??
+          (gameStore.gameState.gameStarted ? 'drawing_question' : 'lobby')
         if (phase === 'lobby' && !gameStore.gameState.gameStarted) {
           await router.push('/lobby')
         } else {
@@ -177,16 +186,16 @@ const joinRoom = async () => {
 }
 const pasteFromClipboard = async () => {
   try {
-    const text = await navigator.clipboard.readText();
+    const text = await navigator.clipboard.readText()
     if (text) {
-      joinRoomId.value = text.trim();
-      joinRoom();
+      joinRoomId.value = text.trim()
+      joinRoom()
     }
   } catch (error) {
-    console.error('Failed to read clipboard:', error);
-    errorMessage.value = 'Не удалось прочитать буфер обмена.';
+    console.error('Failed to read clipboard:', error)
+    errorMessage.value = 'Не удалось прочитать буфер обмена.'
   }
-};
+}
 </script>
 
 <style scoped>
@@ -211,7 +220,7 @@ const pasteFromClipboard = async () => {
 .title {
   color: #333;
   margin: 0;
-  font-size: 2.0rem;
+  font-size: 2rem;
   font-weight: 800;
 }
 
@@ -341,8 +350,12 @@ const pasteFromClipboard = async () => {
 }
 
 @keyframes spin {
-  0% { transform: rotate(0deg); }
-  100% { transform: rotate(360deg); }
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
 }
 
 .error-message {
@@ -377,7 +390,9 @@ const pasteFromClipboard = async () => {
   margin-left: 10px;
   font-size: 20px;
   color: #667eea;
-  transition: color 0.3s ease, transform 0.3s ease;
+  transition:
+    color 0.3s ease,
+    transform 0.3s ease;
 }
 
 .btn-icon:disabled {
@@ -416,7 +431,9 @@ const pasteFromClipboard = async () => {
   justify-content: center;
   background: white;
   color: #667eea;
-  transition: background-color 0.3s ease, color 0.3s ease;
+  transition:
+    background-color 0.3s ease,
+    color 0.3s ease;
 }
 
 .input-with-button .btn-icon:hover:not(:disabled) {
@@ -447,7 +464,11 @@ const pasteFromClipboard = async () => {
   background: #ffffff;
   color: #4f46e5;
   text-decoration: none;
-  transition: background-color 0.2s ease, color 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
+  transition:
+    background-color 0.2s ease,
+    color 0.2s ease,
+    transform 0.2s ease,
+    box-shadow 0.2s ease;
 }
 
 .icon-link:hover {

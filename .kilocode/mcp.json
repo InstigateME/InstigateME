@@ -20,6 +20,13 @@
         "--repository",
         "/Users/ivanvolkov/WebDev/gamecenter"
       ]
+    },
+    "playwright": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@playwright/mcp@latest"
+      ]
     }
   }
 }

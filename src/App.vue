@@ -20,7 +20,6 @@ const uiConnecting = computed(() => gameStore.uiConnecting)
   <div id="app">
     <RouterView />
 
-
     <!-- Debug-панель удалена по требованию -->
   </div>
 </template>

@@ -38,7 +38,7 @@ watch(
       // ignore quota/denied
     }
   },
-  { deep: true }
+  { deep: true },
 )
 
 // Автовосстановление сессии при загрузке приложения

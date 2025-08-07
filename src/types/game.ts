@@ -1,12 +1,12 @@
 export interface Player {
-  id: string;
-  nickname: string;
-  color: string;
-  isHost: boolean;
-  joinedAt: number;
-  authToken: string;
-  votingCards: string[]; // Cards for voting
-  bettingCards: string[]; // Cards for betting
+  id: string
+  nickname: string
+  color: string
+  isHost: boolean
+  joinedAt: number
+  authToken: string
+  votingCards: string[] // Cards for voting
+  bettingCards: string[] // Cards for betting
 }
 
 export type GamePhase =
@@ -20,9 +20,9 @@ export type GamePhase =
   | 'guessing'
   | 'selecting_winners'
   | 'advanced_results'
-  | 'game_over';
+  | 'game_over'
 
-export type GameMode = 'basic' | 'advanced';
+export type GameMode = 'basic' | 'advanced'
 
 export interface GameState {
   roomId: string // Постоянный ID комнаты
@@ -67,11 +67,14 @@ export interface GameState {
 
   // Присутствие игроков
   presence?: Record<string, 'present' | 'absent'>
-  presenceMeta?: Record<string, {
-    lastSeen: number
-    leftAt?: number
-    reason?: 'explicit_leave' | 'presence_timeout' | 'connection_closed'
-  }>
+  presenceMeta?: Record<
+    string,
+    {
+      lastSeen: number
+      leftAt?: number
+      reason?: 'explicit_leave' | 'presence_timeout' | 'connection_closed'
+    }
+  >
 }
 
 export const PROTOCOL_VERSION = 1
@@ -93,9 +96,7 @@ export interface StateSnapshotPayload {
 }
 
 // Diff envelope: incremental patch from host
-export type JsonPatch =
-  | Record<string, any>
-  | null
+export type JsonPatch = Record<string, any> | null
 
 export interface StateDiffPayload {
   meta: StateVersionMeta
@@ -149,54 +150,99 @@ export interface BaseMessage<TType extends string, TPayload> {
 }
 
 // Сообщения лобби и базовой связи
-export type JoinRequestMessage = BaseMessage<'join_request', JoinRequestPayload & { savedPlayerId?: string }>
+export type JoinRequestMessage = BaseMessage<
+  'join_request',
+  JoinRequestPayload & { savedPlayerId?: string }
+>
 export type GameStateUpdateMessage = BaseMessage<'game_state_update', GameState>
 export type LightUpRequestMessage = BaseMessage<'light_up_request', LightUpRequestPayload>
 export type StartGameMessage = BaseMessage<'start_game', { mode: GameMode }>
 export type HeartbeatMessage = BaseMessage<'heartbeat', HeartbeatPayload>
 export type RequestGameStateMessage = BaseMessage<'request_game_state', GameStateRequestPayload>
-export type ConnectionErrorMessage = BaseMessage<'connection_error', { code: string; message: string }>
+export type ConnectionErrorMessage = BaseMessage<
+  'connection_error',
+  { code: string; message: string }
+>
 
 // Presence / оставление комнаты
 export type UserLeftRoomMessage = BaseMessage<'user_left_room', UserLeftRoomPayload>
-export type UserJoinedBroadcastMessage = BaseMessage<'user_joined_broadcast', UserJoinedBroadcastPayload>
+export type UserJoinedBroadcastMessage = BaseMessage<
+  'user_joined_broadcast',
+  UserJoinedBroadcastPayload
+>
 export type UserLeftBroadcastMessage = BaseMessage<'user_left_broadcast', UserLeftBroadcastPayload>
 
 // Миграция хоста
 export type MigrationProposalMessage = BaseMessage<'migration_proposal', MigrationProposalPayload>
 export type MigrationVoteMessage = BaseMessage<'migration_vote', MigrationVotePayload>
-export type MigrationConfirmedMessage = BaseMessage<'migration_confirmed', MigrationConfirmedPayload>
+export type MigrationConfirmedMessage = BaseMessage<
+  'migration_confirmed',
+  MigrationConfirmedPayload
+>
 export type NewHostIdMessage = BaseMessage<'new_host_id', NewHostIdPayload>
-export type HostMigrationStartedMessage = BaseMessage<'host_migration_started', HostMigrationPayload>
+export type HostMigrationStartedMessage = BaseMessage<
+  'host_migration_started',
+  HostMigrationPayload
+>
 
 // Host discovery
-export type HostDiscoveryRequestMessage = BaseMessage<'host_discovery_request', HostDiscoveryRequestPayload>
-export type HostDiscoveryResponseMessage = BaseMessage<'host_discovery_response', HostDiscoveryResponsePayload>
+export type HostDiscoveryRequestMessage = BaseMessage<
+  'host_discovery_request',
+  HostDiscoveryRequestPayload
+>
+export type HostDiscoveryResponseMessage = BaseMessage<
+  'host_discovery_response',
+  HostDiscoveryResponsePayload
+>
 
 // Mesh / Peer list / Direct connect
 export type PeerListRequestMessage = BaseMessage<'request_peer_list', PeerListRequestPayload>
 export type PeerListUpdateMessage = BaseMessage<'peer_list_update', PeerListUpdatePayload>
-export type DirectConnectionRequestMessage = BaseMessage<'direct_connection_request', DirectConnectionRequestPayload>
+export type DirectConnectionRequestMessage = BaseMessage<
+  'direct_connection_request',
+  DirectConnectionRequestPayload
+>
 
 // Синхронизация состояния/версий сети
 export type StateSyncMessage = BaseMessage<'state_sync', StateSyncPayload>
 export type NewHostElectionMessage = BaseMessage<'new_host_election', NewHostElectionPayload>
 
 // Восстановление хоста и слияние сетей
-export type HostRecoveryAnnouncementMessage = BaseMessage<'host_recovery_announcement', HostRecoveryAnnouncementPayload>
-export type NetworkMergeRequestMessage = BaseMessage<'network_merge_request', NetworkMergeRequestPayload>
-export type NetworkMergeResponseMessage = BaseMessage<'network_merge_response', NetworkMergeResponsePayload>
-export type SplitBrainDetectionMessage = BaseMessage<'split_brain_detection', SplitBrainDetectionPayload>
-export type PlayerIdUpdatedMessage = BaseMessage<'player_id_updated', { oldId: string; newId: string; message?: string }>
+export type HostRecoveryAnnouncementMessage = BaseMessage<
+  'host_recovery_announcement',
+  HostRecoveryAnnouncementPayload
+>
+export type NetworkMergeRequestMessage = BaseMessage<
+  'network_merge_request',
+  NetworkMergeRequestPayload
+>
+export type NetworkMergeResponseMessage = BaseMessage<
+  'network_merge_response',
+  NetworkMergeResponsePayload
+>
+export type SplitBrainDetectionMessage = BaseMessage<
+  'split_brain_detection',
+  SplitBrainDetectionPayload
+>
+export type PlayerIdUpdatedMessage = BaseMessage<
+  'player_id_updated',
+  { oldId: string; newId: string; message?: string }
+>
 
 // Игровые сообщения (Провокатор)
-export type DrawQuestionRequestMessage = BaseMessage<'draw_question_request', DrawQuestionRequestPayload>
+export type DrawQuestionRequestMessage = BaseMessage<
+  'draw_question_request',
+  DrawQuestionRequestPayload
+>
 export type SubmitVoteMessage = BaseMessage<'submit_vote', SubmitVotePayload>
 export type SubmitBetMessage = BaseMessage<'submit_bet', SubmitBetPayload>
 export type SubmitAnswerMessage = BaseMessage<'submit_answer', SubmitAnswerPayload>
 export type SubmitGuessMessage = BaseMessage<'submit_guess', SubmitGuessPayload>
 export type NextRoundRequestMessage = BaseMessage<'next_round_request', { playerId: string }>
-export type SubmitWinnersMessage = BaseMessage<'submit_winners', { chooserId: string; winners: string[] }>
+export type SubmitWinnersMessage = BaseMessage<
+  'submit_winners',
+  { chooserId: string; winners: string[] }
+>
 
 // Дискриминируемый юнион всех сообщений
 export type PeerMessage =
@@ -246,7 +292,7 @@ export type PeerMessage =
 export function makeMessage<TType extends PeerMessage['type']>(
   type: TType,
   payload: Extract<PeerMessage, { type: TType }>['payload'],
-  meta: MessageMeta
+  meta: MessageMeta,
 ): Extract<PeerMessage, { type: TType }> {
   return {
     type,

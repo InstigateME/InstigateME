@@ -1,15 +1,13 @@
 <template>
-  <div class="lobby">
+  <div class="lobby" data-testid="lobby-page">
     <div class="container" :aria-busy="gameStore.uiConnecting">
       <div class="header">
         <h1 class="title">Комната</h1>
-        <button class="leave-btn" @click="leaveRoom">
-          Покинуть комнату
-        </button>
+        <button class="leave-btn" @click="leaveRoom" data-testid="leave-room-button">Покинуть комнату</button>
       </div>
 
       <!-- Баннер восстановления/переподключения -->
-      <div v-if="gameStore.uiConnecting" class="reconnect-banner" role="status" aria-live="polite">
+      <div v-if="gameStore.uiConnecting" class="reconnect-banner" role="status" aria-live="polite" data-testid="reconnect-banner">
         <span class="dot" aria-hidden="true"></span>
         Восстановление соединения...
       </div>
@@ -17,54 +15,63 @@
       <!-- Хост секция -->
       <div v-if="gameStore.isHost" class="host-section">
         <div>
-        <div class="room-info">
-          <div class="room-id-section">
-            <h3>ID комнаты для подключения:</h3>
-            <div class="room-id-display">
-              <span class="room-id">{{ gameStore.gameState.hostId }}</span>
-              <button class="copy-btn" @click="copyHostId">
-                {{ copiedHostId ? 'Скопировано!' : 'Копировать' }}
-              </button>
-            </div>
-            <div class="host-info">
-              <small>Отправьте этот ID друзьям для подключения к комнате</small>
+          <div class="room-info">
+            <div class="room-id-section" data-testid="host-roomid-section">
+              <h3>ID комнаты для подключения:</h3>
+              <div class="room-id-display" data-testid="room-id-display">
+                <span class="room-id" data-testid="host-id">{{ gameStore.gameState.hostId }}</span>
+                <button class="copy-btn" @click="copyHostId" data-testid="copy-hostid-button">
+                  {{ copiedHostId ? 'Скопировано!' : 'Копировать' }}
+                </button>
+              </div>
+              <div class="host-info">
+                <small>Отправьте этот ID друзьям для подключения к комнате</small>
+              </div>
+
+              <div style="margin-top: 20px">
+                <h4>Название комнаты: {{ gameStore.gameState.roomId }}</h4>
+                <small style="color: #666">Для удобства запоминания</small>
+              </div>
             </div>
 
-            <div style="margin-top: 20px;">
-              <h4>Название комнаты: {{ gameStore.gameState.roomId }}</h4>
-              <small style="color: #666;">Для удобства запоминания</small>
+            <div class="qr-section">
+              <h3>QR-код для подключения:</h3>
+              <div class="qr-container" data-testid="qr-container">
+                <canvas ref="qrCanvas" class="qr-code" data-testid="qr-canvas"></canvas>
+              </div>
+              <div class="qr-link" data-testid="qr-link">
+                <button
+                  class="copy-link-btn"
+                  @click="copyJoinLink"
+                  :disabled="!gameStore.gameState.roomId"
+                  data-testid="copy-join-link-button"
+                >
+                  {{ linkCopied ? 'Ссылка скопирована!' : 'Скопировать ссылку' }}
+                </button>
+              </div>
             </div>
           </div>
 
-          <div class="qr-section">
-            <h3>QR-код для подключения:</h3>
-            <div class="qr-container">
-              <canvas ref="qrCanvas" class="qr-code"></canvas>
-            </div>
-            <div class="qr-link">
-              <button class="copy-link-btn" @click="copyJoinLink" :disabled="!gameStore.gameState.roomId">
-                {{ linkCopied ? 'Ссылка скопирована!' : 'Скопировать ссылку' }}
-              </button>
-            </div>
+          <div class="start-section" v-if="gameStore.connectionStatus === 'connected'" data-testid="start-section">
+            <button
+              class="btn btn-primary btn-large"
+              @click="startGame"
+              :disabled="!gameStore.canStartGame || gameStore.uiConnecting"
+              data-testid="start-game-button"
+            >
+              {{
+                gameStore.canStartGame
+                  ? 'Начать игру'
+                  : `Ожидание игроков (${gameStore.gameState.players.length}/3)`
+              }}
+            </button>
           </div>
-        </div>
-
-        <div class="start-section" v-if="gameStore.connectionStatus === 'connected'">
-          <button
-            class="btn btn-primary btn-large"
-            @click="startGame"
-            :disabled="!gameStore.canStartGame || gameStore.uiConnecting"
-            aria-disabled="true"
-          >
-            {{ gameStore.canStartGame ? 'Начать игру' : `Ожидание игроков (${gameStore.gameState.players.length}/2)` }}
-          </button>
-        </div>
         </div>
       </div>
 
       <!-- Клиент секция -->
       <div v-else class="client-section">
-        <div class="waiting-message" :aria-busy="gameStore.uiConnecting">
+        <div class="waiting-message" :aria-busy="gameStore.uiConnecting" data-testid="waiting-message">
           <h3>Ожидание начала игры...</h3>
           <p>Хост начнет игру, когда будет готов</p>
         </div>
@@ -73,13 +80,25 @@
       <!-- Список игроков -->
 
       <div class="players-section">
-        <h3>Игроки в комнате ({{ gameStore.gameState.players.length }}/{{ gameStore.gameState.maxPlayers }}):</h3>
-        <div class="players-list" :style="{ pointerEvents: gameStore.uiConnecting ? 'none' : 'auto', opacity: gameStore.uiConnecting ? 0.6 : 1 }">
+        <h3>
+          Игроки в комнате ({{ gameStore.gameState.players.length }}/{{
+            gameStore.gameState.maxPlayers
+          }}):
+        </h3>
+        <div
+          class="players-list"
+          data-testid="players-list"
+          :style="{
+            pointerEvents: gameStore.uiConnecting ? 'none' : 'auto',
+            opacity: gameStore.uiConnecting ? 0.6 : 1,
+          }"
+        >
           <div
             v-for="player in gameStore.gameState.players"
             :key="player.id"
             class="player-item"
             :style="{ backgroundColor: player.color + '20', borderColor: player.color }"
+            data-testid="player-item"
           >
             <div class="player-avatar" :style="{ backgroundColor: player.color }">
               {{ player.nickname[0].toUpperCase() }}
@@ -101,7 +120,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, watch } from 'vue'
+import { ref, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useGameStore } from '@/stores/gameStore'
 import QRCode from 'qrcode'
@@ -128,8 +147,8 @@ const generateQRCode = async () => {
       margin: 2,
       color: {
         dark: '#333333',
-        light: '#ffffff'
-      }
+        light: '#ffffff',
+      },
     })
   } catch (error) {
     console.error('Failed to generate QR code:', error)
@@ -149,7 +168,7 @@ const copyRoomId = async () => {
   }
 }
 
- // Копирование ID хоста
+// Копирование ID хоста
 const copyHostId = async () => {
   try {
     await navigator.clipboard.writeText(gameStore.gameState.hostId)
@@ -197,17 +216,22 @@ const leaveRoom = () => {
       await gameStore.leaveGracefully()
     } catch {
       // Fallback на случай ошибки сети
-      try { gameStore.leaveRoom() } catch {}
+      try {
+        gameStore.leaveRoom()
+      } catch {}
     }
   })()
 }
 
 // Отслеживание начала игры
-watch(() => gameStore.gameState.gameStarted, (started) => {
-  if (started && !gameStore.isHost) {
-    router.push('/game')
-  }
-})
+watch(
+  () => gameStore.gameState.gameStarted,
+  (started) => {
+    if (started && !gameStore.isHost) {
+      router.push('/game')
+    }
+  },
+)
 
 onMounted(async () => {
   // Стартуем восстановление сессии при входе в лобби.
@@ -228,7 +252,8 @@ onMounted(async () => {
   }
 
   // Если игра уже не в lobby — сразу переходим в игру
-  const phase = gameStore.gameState.phase ?? (gameStore.gameState.gameStarted ? 'drawing_question' : 'lobby')
+  const phase =
+    gameStore.gameState.phase ?? (gameStore.gameState.gameStarted ? 'drawing_question' : 'lobby')
   if (phase !== 'lobby' || gameStore.gameState.gameStarted) {
     router.push('/game')
     return

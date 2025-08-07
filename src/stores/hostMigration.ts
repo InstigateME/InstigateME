@@ -1,6 +1,6 @@
 // hostMigration.ts - Готовая функция для миграции хоста с поддержкой сохранения peer ID
 import type { GameState, Player } from '@/types/game'
-import { peerService } from '@/services/peerService'
+import { peerService } from '@/services/peerSelector'
 
 /**
  * Запускает процесс миграции хоста после обнаружения его отключения.
@@ -14,17 +14,17 @@ import { peerService } from '@/services/peerService'
 export async function handleHostMigration(
   currentState: GameState,
   myCurrentId: string,
-  roomId: string
+  roomId: string,
 ): Promise<void> {
   console.log('HOST MIGRATION: Process started.')
-  
+
   // 1. Фильтруем игроков, удаляя старого хоста
-  const remainingPlayers = currentState.players.filter(p => p.id !== currentState.hostId)
+  const remainingPlayers = currentState.players.filter((p) => p.id !== currentState.hostId)
 
   if (remainingPlayers.length === 0) {
     console.log('HOST MIGRATION: No players left. Ending game.')
     // Здесь должна быть логика завершения игры, например, вызов leaveRoom()
-    // leaveRoom(); 
+    // leaveRoom();
     return
   }
 
@@ -33,8 +33,10 @@ export async function handleHostMigration(
   // Это гарантирует, что все клиенты выберут одного и того же кандидата.
   const sortedPlayers = [...remainingPlayers].sort((a, b) => a.id.localeCompare(b.id))
   const newHostCandidate = sortedPlayers[0]
-  
-  console.log(`HOST MIGRATION: New host candidate elected: ${newHostCandidate.nickname} (${newHostCandidate.id})`)
+
+  console.log(
+    `HOST MIGRATION: New host candidate elected: ${newHostCandidate.nickname} (${newHostCandidate.id})`,
+  )
 
   try {
     // 3. Разделение логики: становлюсь ли я хостом или подключаюсь к новому?
@@ -60,14 +62,14 @@ export async function handleHostMigration(
 async function becomeNewHost(
   currentState: GameState,
   myOldId: string,
-  roomId: string
+  roomId: string,
 ): Promise<void> {
   console.log('BECOME NEW HOST: Initializing...')
 
   // 1. КРИТИЧНО: Создаем новый PeerJS instance с сохранением ID для комнаты
   const newHostPeerId = await peerService.createHost(roomId)
   console.log(`BECOME NEW HOST: Host peer ID (may be restored): ${newHostPeerId}`)
-  
+
   // 2. Обновляем локальное состояние и gameState
   // Это критически важно: gameState теперь будет содержать новый ID хоста.
   const updatedGameState = updateStateForNewHost(currentState, myOldId, newHostPeerId)
@@ -77,7 +79,7 @@ async function becomeNewHost(
   // setIsHost(true);
   // setHostId(newHostPeerId);
   // updateGameState(updatedGameState);
-  
+
   // 4. Настраиваем обработчики для нового хоста и запускаем heartbeat
   // setupHostMessageHandlers();
   // peerService.setAsHost(newHostPeerId);
@@ -91,14 +93,14 @@ async function becomeNewHost(
 async function reconnectToNewHost(
   newHostId: string,
   myCurrentId: string,
-  currentState?: GameState
+  currentState?: GameState,
 ): Promise<void> {
   console.log(`RECONNECT: Attempting to connect to new host ${newHostId}...`)
 
   // 1. Используем peerService для переподключения.
   // Эта функция в peerService должна закрыть старые соединения и открыть новое.
   await peerService.reconnectToNewHost(newHostId)
-  
+
   // 2. Обновляем store/состояние приложения
   // setIsHost(false);
   // setHostId(newHostId);
@@ -117,12 +119,13 @@ async function reconnectToNewHost(
     meta: {
       roomId: currentState?.roomId || '',
       fromId: myCurrentId,
-      ts: Date.now()
+      ts: Date.now(),
     },
-    payload: { 
-      nickname: (currentState?.players.find((p: Player) => p.id === myCurrentId)?.nickname) || 'Player',
-      savedPlayerId: myCurrentId
-    }
+    payload: {
+      nickname:
+        currentState?.players.find((p: Player) => p.id === myCurrentId)?.nickname || 'Player',
+      savedPlayerId: myCurrentId,
+    },
   })
 
   console.log(`RECONNECT: Connection request sent to new host.`)
@@ -135,21 +138,25 @@ async function reconnectToNewHost(
  * @param newHostId - Новый PeerJS ID этого же игрока.
  * @returns {GameState} - Обновленное состояние игры.
  */
-function updateStateForNewHost(oldState: GameState, oldHostId: string, newHostId: string): GameState {
+function updateStateForNewHost(
+  oldState: GameState,
+  oldHostId: string,
+  newHostId: string,
+): GameState {
   const newState = { ...oldState }
 
   // Обновляем ID хоста в корневом объекте
   newState.hostId = newHostId
-  
+
   // Находим игрока, который стал хостом, и обновляем его данные
-  const hostPlayer = newState.players.find(p => p.id === oldHostId)
+  const hostPlayer = newState.players.find((p) => p.id === oldHostId)
   if (hostPlayer) {
     hostPlayer.id = newHostId // Обновляем его PeerJS ID
-    hostPlayer.isHost = true   // Устанавливаем флаг хоста
+    hostPlayer.isHost = true // Устанавливаем флаг хоста
   }
 
   // Снимаем флаг хоста со всех остальных на всякий случай
-  newState.players.forEach(p => {
+  newState.players.forEach((p) => {
     if (p.id !== newHostId) {
       p.isHost = false
     }

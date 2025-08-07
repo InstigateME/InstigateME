@@ -5,9 +5,15 @@ export const useCounterStore = defineStore('counter', {
     count: 0,
   }),
   actions: {
-    increment() { this.count++ },
-    decrement() { this.count-- },
-    reset() { this.count = 0 },
+    increment() {
+      this.count++
+    },
+    decrement() {
+      this.count--
+    },
+    reset() {
+      this.count = 0
+    },
   },
   // Demo: persist only 'count' with debounce and cross-tab sync
   persist: {

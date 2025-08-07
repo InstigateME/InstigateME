@@ -68,7 +68,7 @@ function mergePaths<S extends StateTree>(target: S, patch: Partial<S>, paths?: s
   }
   for (const path of paths) {
     if (Object.prototype.hasOwnProperty.call(patch, path)) {
-      (target as any)[path] = (patch as any)[path]
+      ;(target as any)[path] = (patch as any)[path]
     }
   }
 }
@@ -79,11 +79,14 @@ function applyMigrations(raw: any, toVersion?: number, migrations?: Record<numbe
 
   // Нормализуем во wrapper ИСХОДЯ ИЗ raw, сохраняя текущую версию если есть
   const initialVersion = typeof raw?.__v === 'number' ? raw.__v : 0
-  let wrapper: any = (raw && typeof raw === 'object' && ('data' in raw || '__v' in raw))
-    ? { __v: initialVersion, data: (raw as any).data ?? raw }
-    : { __v: initialVersion, data: raw }
+  let wrapper: any =
+    raw && typeof raw === 'object' && ('data' in raw || '__v' in raw)
+      ? { __v: initialVersion, data: (raw as any).data ?? raw }
+      : { __v: initialVersion, data: raw }
 
-  const versions = Object.keys(migrations).map(Number).sort((a, b) => a - b)
+  const versions = Object.keys(migrations)
+    .map(Number)
+    .sort((a, b) => a - b)
   for (const v of versions) {
     if (v > (typeof wrapper.__v === 'number' ? wrapper.__v : 0) && v <= toVersion) {
       try {
@@ -151,7 +154,11 @@ export function persistedState(optionsArg?: PersistOptions): (context: PiniaPlug
 
     function plugin(context: PiniaPluginContext): void {
       // Безопасность: корректный PiniaPluginContext
-      if (!context || typeof (context as any).store !== 'object' || typeof (context as any).options !== 'object') {
+      if (
+        !context ||
+        typeof (context as any).store !== 'object' ||
+        typeof (context as any).options !== 'object'
+      ) {
         return
       }
       const { store, options } = context
@@ -161,7 +168,6 @@ export function persistedState(optionsArg?: PersistOptions): (context: PiniaPlug
         try {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           if (typeof window !== 'undefined' && (window as any).__DEBUG_PERSIST) {
-            // eslint-disable-next-line no-console
             console.log(`[persistedState] ${msg}`, payload ?? '')
           }
         } catch {
@@ -183,169 +189,154 @@ export function persistedState(optionsArg?: PersistOptions): (context: PiniaPlug
         return
       }
 
-    // Нормализация опций: приоритет store.persist > factoryOptions > дефолты
-    const key =
-      (persistFromStore?.key) ??
-      (factoryOptions?.key) ??
-      store.$id
+      // Нормализация опций: приоритет store.persist > factoryOptions > дефолты
+      const key = persistFromStore?.key ?? factoryOptions?.key ?? store.$id
 
-    const version =
-      (persistFromStore?.version) ??
-      (factoryOptions?.version) ??
-      0
+      const version = persistFromStore?.version ?? factoryOptions?.version ?? 0
 
-    const paths =
-      (persistFromStore?.paths) ??
-      (factoryOptions?.paths)
+      const paths = persistFromStore?.paths ?? factoryOptions?.paths
 
-    const debounceMs =
-      (persistFromStore?.debounceMs) ??
-      (factoryOptions?.debounceMs) ??
-      250
+      const debounceMs = persistFromStore?.debounceMs ?? factoryOptions?.debounceMs ?? 250
 
-    const syncTabs =
-      (persistFromStore?.syncTabs) ??
-      (factoryOptions?.syncTabs) ??
-      true
+      const syncTabs = persistFromStore?.syncTabs ?? factoryOptions?.syncTabs ?? true
 
-    const serialize =
-      (persistFromStore?.serialize) ??
-      (factoryOptions?.serialize) ??
-      defaultSerialize
+      const serialize = persistFromStore?.serialize ?? factoryOptions?.serialize ?? defaultSerialize
 
-    const deserialize =
-      (persistFromStore?.deserialize) ??
-      (factoryOptions?.deserialize) ??
-      defaultDeserialize
+      const deserialize =
+        persistFromStore?.deserialize ?? factoryOptions?.deserialize ?? defaultDeserialize
 
-    const migrations =
-      (persistFromStore?.migrations) ??
-      (factoryOptions?.migrations)
+      const migrations = persistFromStore?.migrations ?? factoryOptions?.migrations
 
-    const storageKey = joinKey(key)
-    dbg('init', { id: store.$id, storageKey, version, paths, debounceMs, syncTabs })
+      const storageKey = joinKey(key)
+      dbg('init', { id: store.$id, storageKey, version, paths, debounceMs, syncTabs })
 
-    // Сбор состояния по paths
-    const collect = () => {
-      const data = pickPaths(store.$state as any, paths)
-      return { __v: version ?? 0, data }
-    }
-
-    // Сохранение (без дебаунса)
-    const saveNow = () => {
-      try {
-        const wrapper = collect()
-        const raw = serialize(wrapper)
-        dbg('saveNow', { storageKey, raw })
-        safeSetItem(storageKey, raw)
-      } catch (e) {
-        dbg('saveNow:error', e)
+      // Сбор состояния по paths
+      const collect = () => {
+        const data = pickPaths(store.$state as any, paths)
+        return { __v: version ?? 0, data }
       }
-    }
 
-    // Debounced сохранение
-    const saveDebounced = debounce(saveNow, debounceMs)
-
-    // Гидратация
-    const existingRaw = safeGetItem(storageKey)
-    dbg('hydrate:read', { has: existingRaw != null, existingRaw })
-
-    const isOptionsStore = typeof (options as any)?.state === 'function'
-
-    if (existingRaw == null) {
-      // Нет ключа — первичная запись:
-      // - Для setup-store (options.state отсутствует) создаём запись немедленно, чтобы интеграция ожидала ключ.
-      // - Для options-store пропускаем первичную запись, чтобы не ломать debounce-тест (считает один setItem).
-      if (!isOptionsStore) {
+      // Сохранение (без дебаунса)
+      const saveNow = () => {
         try {
-          dbg('hydrate:primarySave:setup-store')
-          saveNow()
+          const wrapper = collect()
+          const raw = serialize(wrapper)
+          dbg('saveNow', { storageKey, raw })
+          safeSetItem(storageKey, raw)
         } catch (e) {
-          dbg('hydrate:primarySave:error', e)
+          dbg('saveNow:error', e)
+        }
+      }
+
+      // Debounced сохранение
+      const saveDebounced = debounce(saveNow, debounceMs)
+
+      // Гидратация
+      const existingRaw = safeGetItem(storageKey)
+      dbg('hydrate:read', { has: existingRaw != null, existingRaw })
+
+      const isOptionsStore = typeof (options as any)?.state === 'function'
+
+      if (existingRaw == null) {
+        // Нет ключа — первичная запись:
+        // - Для setup-store (options.state отсутствует) создаём запись немедленно, чтобы интеграция ожидала ключ.
+        // - Для options-store пропускаем первичную запись, чтобы не ломать debounce-тест (считает один setItem).
+        if (!isOptionsStore) {
+          try {
+            dbg('hydrate:primarySave:setup-store')
+            saveNow()
+          } catch (e) {
+            dbg('hydrate:primarySave:error', e)
+          }
+        } else {
+          dbg('hydrate:primarySave:skipped for options-store')
         }
       } else {
-        dbg('hydrate:primarySave:skipped for options-store')
-      }
-    } else {
-      let parsed: any = null
-      try {
-        // ВАЖНО: использовать кастомный deserialize, иначе ломаются кейсы с 'not-json' и обёртками
-        parsed = deserialize(existingRaw)
-        dbg('hydrate:parsed', { parsed })
-      } catch (e) {
-        dbg('hydrate:deserialize:error', e)
-        parsed = null
-      }
-
-      if (parsed == null) {
-        // Битые данные — не мержим ничего в стор, просто перезаписываем валидным wrapper
+        let parsed: any = null
         try {
-          dbg('hydrate:invalid, rewriting wrapper')
-          saveNow()
+          // ВАЖНО: использовать кастомный deserialize, иначе ломаются кейсы с 'not-json' и обёртками
+          parsed = deserialize(existingRaw)
+          dbg('hydrate:parsed', { parsed })
         } catch (e) {
-          dbg('hydrate:rewrite:error', e)
+          dbg('hydrate:deserialize:error', e)
+          parsed = null
         }
-      } else {
-        // Применяем миграции и мержим по paths
-        const migrated = applyMigrations(parsed, version, migrations)
-        const payload = (migrated && typeof migrated === 'object' && 'data' in migrated) ? (migrated as any).data : migrated
-        dbg('hydrate:migrated', { migrated, payload })
-        if (payload && typeof payload === 'object') {
-          mergePaths(store.$state as any, payload as any, paths)
-          dbg('hydrate:merged', { state: pickPaths(store.$state as any, paths) })
-        }
-        // После гидратации фиксируем текущее состояние (включая форс версии)
-        try {
-          saveNow()
-        } catch (e) {
-          dbg('hydrate:finalSave:error', e)
-        }
-      }
-    }
 
-    // Подписка на изменения — только debounce запись
-    const unsubscribe = (store as Store).$subscribe((_mutation, _state) => {
-      try {
-        saveDebounced()
-      } catch {
-        // ignore
-      }
-    })
-
-    // syncTabs
-    if (syncTabs && typeof window !== 'undefined') {
-      const handler = (e: StorageEvent) => {
-        if (e.key !== storageKey) return
-        // в jsdom e.storageArea может быть не типа Storage — не полагаемся на него
-        if (e.newValue == null) return
-        try {
-          const parsed = deserialize(e.newValue)
+        if (parsed == null) {
+          // Битые данные — не мержим ничего в стор, просто перезаписываем валидным wrapper
+          try {
+            dbg('hydrate:invalid, rewriting wrapper')
+            saveNow()
+          } catch (e) {
+            dbg('hydrate:rewrite:error', e)
+          }
+        } else {
+          // Применяем миграции и мержим по paths
           const migrated = applyMigrations(parsed, version, migrations)
-          const payload = (migrated && typeof migrated === 'object' && 'data' in migrated) ? (migrated as any).data : migrated
+          const payload =
+            migrated && typeof migrated === 'object' && 'data' in migrated
+              ? (migrated as any).data
+              : migrated
+          dbg('hydrate:migrated', { migrated, payload })
           if (payload && typeof payload === 'object') {
             mergePaths(store.$state as any, payload as any, paths)
+            dbg('hydrate:merged', { state: pickPaths(store.$state as any, paths) })
           }
+          // После гидратации фиксируем текущее состояние (включая форс версии)
+          try {
+            saveNow()
+          } catch (e) {
+            dbg('hydrate:finalSave:error', e)
+          }
+        }
+      }
+
+      // Подписка на изменения — только debounce запись
+      const unsubscribe = (store as Store).$subscribe((_mutation, _state) => {
+        try {
+          saveDebounced()
         } catch {
           // ignore
         }
-      }
-      window.addEventListener('storage', handler, false)
-      tabListeners.set(storageKey, handler)
+      })
 
-      const originalDispose = (store as any)._dispose
-      ;(store as any)._dispose = (...args: any[]) => {
-        const h = tabListeners.get(storageKey)
-        if (h) {
-          window.removeEventListener('storage', h)
-          tabListeners.delete(storageKey)
+      // syncTabs
+      if (syncTabs && typeof window !== 'undefined') {
+        const handler = (e: StorageEvent) => {
+          if (e.key !== storageKey) return
+          // в jsdom e.storageArea может быть не типа Storage — не полагаемся на него
+          if (e.newValue == null) return
+          try {
+            const parsed = deserialize(e.newValue)
+            const migrated = applyMigrations(parsed, version, migrations)
+            const payload =
+              migrated && typeof migrated === 'object' && 'data' in migrated
+                ? (migrated as any).data
+                : migrated
+            if (payload && typeof payload === 'object') {
+              mergePaths(store.$state as any, payload as any, paths)
+            }
+          } catch {
+            // ignore
+          }
         }
-        // вызовем оригинальный dispose, если он существует
-        if (typeof originalDispose === 'function') {
-          return originalDispose.apply(store, args)
+        window.addEventListener('storage', handler, false)
+        tabListeners.set(storageKey, handler)
+
+        const originalDispose = (store as any)._dispose
+        ;(store as any)._dispose = (...args: any[]) => {
+          const h = tabListeners.get(storageKey)
+          if (h) {
+            window.removeEventListener('storage', h)
+            tabListeners.delete(storageKey)
+          }
+          // вызовем оригинальный dispose, если он существует
+          if (typeof originalDispose === 'function') {
+            return originalDispose.apply(store, args)
+          }
         }
       }
     }
-  }
 
     // ВАЖНО: фабрика возвращает конкретный plugin с замкнутыми factoryOptions
     return plugin
@@ -376,9 +367,7 @@ type PersistedCompat =
   {
     (): (ctx: PiniaPluginContext) => void
     (opts: PersistOptions): (ctx: PiniaPluginContext) => void
-  }
-  &
-  // Прямой вызов как плагина
+  } & // Прямой вызов как плагина
   {
     (ctx: PiniaPluginContext): void
     (opts: PersistOptions, ctx: PiniaPluginContext): void

@@ -1,17 +1,14 @@
 <template>
   <!-- Триггер (по умолчанию — кнопка помощи). Если передан слот trigger, он переопределит этот контент -->
   <span class="rules-trigger">
-    <slot
-      name="trigger"
-      :open="open"
-      :close="close"
-      :modelValue="modelValue"
-    >
-      <button class="help-btn"
-              :aria-pressed="internalOpen"
-              @click.stop="open"
-              aria-label="Правила игры"
-              title="Правила игры">
+    <slot name="trigger" :open="open" :close="close" :modelValue="modelValue">
+      <button
+        class="help-btn"
+        :aria-pressed="internalOpen"
+        @click.stop="open"
+        aria-label="Правила игры"
+        title="Правила игры"
+      >
         ❓
       </button>
     </slot>
@@ -42,14 +39,15 @@
           <section class="rules__section">
             <h5 class="rules__h">Подготовка к игре</h5>
             <ol class="rules__list">
-              <li>Соберите компанию из <strong>3–8 человек</strong> и настройтесь на увлекательную
+              <li>
+                Соберите компанию из <strong>3–8 человек</strong> и настройтесь на увлекательную
                 игру.
               </li>
               <li>
                 Каждый игрок выбирает себе карточку <strong>«Провокатор»</strong> любого цвета по
-                желанию.
-                Затем каждый получает по <strong>2 карточки с кругляшками цветов других
-                игроков</strong> (но не своего) и <strong>3 карточки ставок</strong> с символами:
+                желанию. Затем каждый получает по
+                <strong>2 карточки с кругляшками цветов других игроков</strong> (но не своего) и
+                <strong>3 карточки ставок</strong> с символами:
                 <ul class="rules__bullets">
                   <li><code>0</code> — никто не проголосует за меня;</li>
                   <li><code>±</code> — возможно, получу несколько голосов;</li>
@@ -58,10 +56,13 @@
                 <em>Пример:</em> Желтый игрок получает 2 карточки синего и 2 карточки белого цвета
                 (цвета других игроков), а также комплект карточек ставок.
               </li>
-              <li>Если играете впервые, возьмите колоду карт с <strong>одной звездочкой
-                <code>*</code></strong>, перемешайте её и положите на стол.
+              <li>
+                Если играете впервые, возьмите колоду карт с
+                <strong>одной звездочкой <code>*</code></strong
+                >, перемешайте её и положите на стол.
               </li>
-              <li>Все карточки держатся <strong>рубашкой вверх</strong>, чтобы их не видели другие
+              <li>
+                Все карточки держатся <strong>рубашкой вверх</strong>, чтобы их не видели другие
                 игроки.
               </li>
             </ol>
@@ -70,13 +71,15 @@
           <section class="rules__section">
             <h5 class="rules__h">Как играть?</h5>
             <ol class="rules__list">
-              <li>Игрок по очереди (например, Синий) тянет карту из колоды и <strong>зачитывает
-                вопрос</strong>.
+              <li>
+                Игрок по очереди (например, Синий) тянет карту из колоды и
+                <strong>зачитывает вопрос</strong>.
               </li>
-              <li>Все участники (включая ведущего) выбирают, <strong>кто из игроков лучше всего
-                подходит под описание</strong> из вопроса. Затем <strong>голосуют</strong>,
-                выкладывая <strong>две карточки с кругляшками</strong> — обе можно отдать одному
-                игроку или разделить.
+              <li>
+                Все участники (включая ведущего) выбирают,
+                <strong>кто из игроков лучше всего подходит под описание</strong> из вопроса. Затем
+                <strong>голосуют</strong>, выкладывая <strong>две карточки с кругляшками</strong> —
+                обе можно отдать одному игроку или разделить.
               </li>
               <li>
                 Прежде чем открыть результаты, <strong>все делают ставку</strong>:
@@ -89,44 +92,54 @@
               <li>
                 Открываются карточки голосования:
                 <ul class="rules__bullets">
-                  <li>Например, Белый игрок получил 3 голоса и <strong>предсказал</strong> это,
+                  <li>
+                    Например, Белый игрок получил 3 голоса и <strong>предсказал</strong> это,
                     выложив <code>+</code> — он получает <strong>3 победных очка</strong>.
                   </li>
-                  <li>Синий выложил <code>0</code>, но за него проголосовали — <strong>очков не
-                    получает</strong>.
+                  <li>
+                    Синий выложил <code>0</code>, но за него проголосовали —
+                    <strong>очков не получает</strong>.
                   </li>
-                  <li>Желтый поставил <code>+</code>, но не стал лидером — тоже <strong>без
-                    очков</strong>.
+                  <li>
+                    Желтый поставил <code>+</code>, но не стал лидером — тоже
+                    <strong>без очков</strong>.
                   </li>
                 </ul>
               </li>
-              <li>После подсчёта очков каждый забирает свои карточки, а <strong>следующий игрок
-                тянет новый вопрос</strong>.
+              <li>
+                После подсчёта очков каждый забирает свои карточки, а
+                <strong>следующий игрок тянет новый вопрос</strong>.
               </li>
             </ol>
           </section>
 
           <section class="rules__section">
             <h5 class="rules__h">Уровень сложности 2.0</h5>
-            <p class="rules__p">Хотите больше <strong>провокации</strong>? Возьмите колоду с
-              <strong>двумя звёздочками <code>**</code></strong> — вопросы станут острее!</p>
-            <h6 class="rules__h" style="font-weight:700;">Правила:</h6>
+            <p class="rules__p">
+              Хотите больше <strong>провокации</strong>? Возьмите колоду с
+              <strong>двумя звёздочками <code>**</code></strong> — вопросы станут острее!
+            </p>
+            <h6 class="rules__h" style="font-weight: 700">Правила:</h6>
             <ol class="rules__list">
               <li>Каждому понадобится <strong>лист бумаги и ручка</strong>.</li>
-              <li>Игроки снова выбирают себе карточку «Провокатор» и по 2 карточки с кругляшками
+              <li>
+                Игроки снова выбирают себе карточку «Провокатор» и по 2 карточки с кругляшками
                 цветов других участников.
               </li>
               <li>Все карточки держатся <strong>рубашкой вверх</strong>.</li>
-              <li>Игрок зачитывает вопрос. Все участники <strong>тайно голосуют</strong> двумя
-                карточками (из 4-х имеющихся) за того, кто, по их мнению, должен <strong>отвечать на
-                  вопрос</strong>.
+              <li>
+                Игрок зачитывает вопрос. Все участники <strong>тайно голосуют</strong> двумя
+                карточками (из 4-х имеющихся) за того, кто, по их мнению, должен
+                <strong>отвечать на вопрос</strong>.
               </li>
-              <li>Карты вскрываются. Игрок с большинством голосов (например, Синий) <strong>отвечает
-                письменно</strong>.
+              <li>
+                Карты вскрываются. Игрок с большинством голосов (например, Синий)
+                <strong>отвечает письменно</strong>.
               </li>
               <li>Остальные <strong>пишут предположения</strong>, что он мог ответить.</li>
-              <li>Синий игрок показывает свой ответ. Все, кто угадал или оказался максимально
-                близким, получают <strong>1 балл</strong>.
+              <li>
+                Синий игрок показывает свой ответ. Все, кто угадал или оказался максимально близким,
+                получают <strong>1 балл</strong>.
               </li>
             </ol>
           </section>
@@ -147,11 +160,14 @@
 <script setup lang="ts">
 import { ref, watch, computed } from 'vue'
 
-const props = withDefaults(defineProps<{
-  modelValue?: boolean
-}>(), {
-  modelValue: undefined
-})
+const props = withDefaults(
+  defineProps<{
+    modelValue?: boolean
+  }>(),
+  {
+    modelValue: undefined,
+  },
+)
 
 const emit = defineEmits<{
   (e: 'update:modelValue', value: boolean): void
@@ -163,11 +179,15 @@ const emit = defineEmits<{
 const isControlled = computed(() => typeof props.modelValue === 'boolean')
 const internalOpen = ref(false)
 
-watch(() => props.modelValue, (val) => {
-  if (isControlled.value) {
-    internalOpen.value = !!val
-  }
-}, { immediate: true })
+watch(
+  () => props.modelValue,
+  (val) => {
+    if (isControlled.value) {
+      internalOpen.value = !!val
+    }
+  },
+  { immediate: true },
+)
 
 function open() {
   if (isControlled.value) {
@@ -206,8 +226,13 @@ function close() {
   background: #ffffff;
   color: #4f46e5;
   cursor: pointer;
-  transition: background-color .18s ease, color .18s ease, transform .12s ease, box-shadow .18s ease, border-color .18s ease;
-  box-shadow: 0 1px 2px rgba(15,23,42,0.06);
+  transition:
+    background-color 0.18s ease,
+    color 0.18s ease,
+    transform 0.12s ease,
+    box-shadow 0.18s ease,
+    border-color 0.18s ease;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
   padding: 0;
   font-size: 18px;
   line-height: 1;
@@ -224,12 +249,12 @@ function close() {
 }
 .help-btn:focus {
   outline: none;
-  box-shadow: 0 0 0 3px rgba(79,70,229,0.25);
+  box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.25);
 }
-.help-btn[aria-pressed="true"] {
+.help-btn[aria-pressed='true'] {
   background: #eef2ff;
   border-color: #c7d2fe;
-  box-shadow: 0 0 0 3px rgba(79,70,229,0.15);
+  box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.15);
 }
 
 /* Modal (popup) */
