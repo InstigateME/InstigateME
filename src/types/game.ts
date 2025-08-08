@@ -275,6 +275,7 @@ export type PeerMessage =
   | SubmitBetMessage
   | SubmitAnswerMessage
   | SubmitGuessMessage
+  | VoteAckMessage
   | NextRoundRequestMessage
   | SubmitWinnersMessage
   // Presence
@@ -494,11 +495,13 @@ export interface UserLeftBroadcastPayload {
 export interface SubmitVotePayload {
   voterId: string
   targetIds: string[] // длиной до 2
+  stateVersion?: number
 }
 
 export interface SubmitBetPayload {
   playerId: string
   bet: '0' | '±' | '+'
+  stateVersion?: number
 }
 
 export interface SubmitAnswerPayload {
@@ -510,3 +513,12 @@ export interface SubmitGuessPayload {
   playerId: string
   guess: string
 }
+
+// --- VoteAck ---
+export interface VoteAckPayload {
+  voterId: string
+  stateVersion?: number
+  targetIds?: string[]
+  // можно добавить другие поля по необходимости
+}
+export type VoteAckMessage = BaseMessage<'vote_ack', VoteAckPayload>

@@ -18,6 +18,7 @@
     "format": "prettier --write src/"
   },
   "dependencies": {
+    "async-mutex": "^0.5.0",
     "peerjs": "^1.5.5",
     "qrcode": "^1.5.4",
     "vue-router": "^4.5.1"
@@ -38,6 +39,7 @@
     "@vue/tsconfig": "^0.7.0",
     "eslint": "^9.31.0",
     "eslint-plugin-playwright": "^2.2.0",
+    "eslint-plugin-unused-imports": "^4.1.4",
     "eslint-plugin-vue": "~10.3.0",
     "jiti": "^2.4.2",
     "jsdom": "^26.1.0",

@@ -207,8 +207,13 @@
             placeholder="Введите ваш ответ"
           ></textarea>
           <div class="answering-actions">
-            <button class="btn-primary answering-submit" data-testid="answering-submit" :disabled="!answer" @click="onSendAnswer">
-              Отправить ответ
+            <button
+              class="btn-primary answering-submit"
+              data-testid="answering-submit"
+              :disabled="!answer || gameStore.isAnswerSubmitting"
+              @click="onSendAnswer"
+            >
+              {{ gameStore.isAnswerSubmitting ? 'Отправка...' : 'Отправить ответ' }}
             </button>
           </div>
         </div>
@@ -252,10 +257,10 @@
           <div class="guessing-actions">
             <button
               class="btn-primary guessing-submit"
-              :disabled="!guess || alreadyGuessed"
+              :disabled="!guess || alreadyGuessed || gameStore.isGuessSubmitting"
               @click="onSendGuess"
             >
-              Отправить
+              {{ gameStore.isGuessSubmitting ? 'Отправка...' : 'Отправить' }}
             </button>
             <span v-if="alreadyGuessed" class="guess-note">Догадка отправлена</span>
           </div>

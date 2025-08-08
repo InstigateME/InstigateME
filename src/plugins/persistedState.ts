@@ -1,4 +1,4 @@
-import type { PiniaPluginContext, StateTree, _GettersTree, Store, StoreGeneric } from 'pinia'
+import type { PiniaPluginContext, StateTree, Store } from 'pinia'
 
 type MigrationFn = (raw: any) => any
 

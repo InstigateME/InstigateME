@@ -1,5 +1,6 @@
 import { ref, computed, watch } from 'vue'
 import { defineStore } from 'pinia'
+import { Mutex } from 'async-mutex'
 import { storageSafe } from '@/utils/storageSafe'
 import { isDebugEnabled } from '@/utils/debug'
 import type {
@@ -12,11 +13,7 @@ import type {
   NewHostIdPayload,
   HostDiscoveryRequestPayload,
   HostDiscoveryResponsePayload,
-  PeerListRequestPayload,
   PeerListUpdatePayload,
-  DirectConnectionRequestPayload,
-  StateSyncPayload,
-  NewHostElectionPayload,
   ExtendedSessionData,
   HostRecoveryAnnouncementPayload,
 } from '@/types/game'
@@ -24,10 +21,7 @@ import { makeMessage } from '@/types/game'
 import type { MessageMeta } from '@/types/game'
 import { peerService } from '@/services/peerSelector'
 import {
-  MIGRATION_TIMEOUT,
   VOTE_TIMEOUT,
-  HOST_DISCOVERY_TIMEOUT,
-  HOST_GRACE_PERIOD,
   MESH_RESTORATION_DELAY,
 } from '@/types/game'
 
@@ -36,7 +30,6 @@ import {
  * - Pinia persist: атомарные поля (см. persist.paths ниже)
  * - storageSafe (namespace 'game'): TTL-снапшот hostGameStateSnapshot, стабильный roomId
  */
-const SESSION_TIMEOUT = 30 * 60 * 1000 // 30 минут
 const HOST_SNAPSHOT_TTL = 15 * 60 * 1000 // 15 минут
 
 // ---------- Request guards & standardized errors ----------
@@ -50,6 +43,7 @@ type RequestMap = Record<
     error: StandardError | null
   }
 >
+
 interface StandardError {
   code?: string
   message: string
@@ -455,76 +449,114 @@ export const useGameStore = defineStore('game', () => {
     return card
   }
 
+  // --- Мьютексы для критических секций ---
+  const voteMutex = new Mutex()
+  const betMutex = new Mutex()
+
   // Игрок делает голос: votesArr — массив из двух id выбранных игроков
-  const submitVote = (voterId: string, votesArr: string[]) => {
-    logAction('submit_vote', { voterId, votes: votesArr })
-    if (gamePhase.value !== 'voting' && gamePhase.value !== 'secret_voting') return
-    if (!gameState.value.votes) gameState.value.votes = {}
-    gameState.value.votes[voterId] = votesArr
-    broadcastGameState()
-
-    // Автопереход фазы для advanced: когда ВСЕ активные игроки проголосовали, двигаем secret_voting -> answering
-    if (gameMode.value === 'advanced' && gamePhase.value === 'secret_voting' && isHost.value) {
-      debugSnapshot('before_secret_to_answering_check')
-      // Количество активных игроков (исключаем отсутствующих)
-      const activePlayers = (gameState.value.players || []).filter((p) => {
-        const st = gameState.value.presence?.[p.id]
-        return st !== 'absent'
-      })
-      const requiredVotes = activePlayers.length
-      const receivedVotes = Object.keys(gameState.value.votes || {}).filter((pid) =>
-        activePlayers.some((p) => p.id === pid),
-      ).length
-
-      if (receivedVotes >= requiredVotes && requiredVotes > 0) {
-        // Подсчёт голосов и определение лидера
-        const votesObj = gameState.value.votes ?? {}
-        const voteCounts: Record<string, number> = {}
-        Object.values(votesObj).forEach((voteArr: string[]) => {
-          voteArr.forEach((targetId) => {
-            voteCounts[targetId] = (voteCounts[targetId] || 0) + 1
-          })
-        })
-        gameState.value.voteCounts = voteCounts
-
-        const maxVotes = Math.max(0, ...Object.values(voteCounts))
-        const leaders = Object.entries(voteCounts)
-          .filter(([_, count]) => count === maxVotes && maxVotes > 0)
-          .map(([playerId]) => playerId)
-
-        gameState.value.answeringPlayerId = leaders[0] || null
-        gamePhase.value = 'answering'
-        gameState.value.phase = 'answering'
-        broadcastGameState()
+  const submitVote = async (voterId: string, votesArr: string[]) => {
+    console.log('[MUTEX] submitVote: ожидаем мьютекс', voterId)
+    await voteMutex.runExclusive(async () => {
+      console.log('[MUTEX] submitVote: вошли в критическую секцию', voterId)
+      logAction('submit_vote', { voterId, votes: votesArr })
+      if (gamePhase.value !== 'voting' && gamePhase.value !== 'secret_voting') {
+        console.log('[MUTEX] submitVote: невалидная фаза, выход', gamePhase.value)
+        return
       }
-    }
+      if (!gameState.value.votes) gameState.value.votes = {}
+      gameState.value.votes[voterId] = votesArr
+      gameState.value.stateVersion = (gameState.value.stateVersion || 1) + 1
+      broadcastGameState()
+      console.log('[MUTEX] submitVote: после broadcastGameState')
+
+      // Автопереход фазы для advanced: когда ВСЕ активные игроки проголосовали, двигаем secret_voting -> answering
+      if (gameMode.value === 'advanced' && gamePhase.value === 'secret_voting' && isHost.value) {
+        debugSnapshot('before_secret_to_answering_check')
+        // Количество активных игроков (исключаем отсутствующих)
+        const activePlayers = (gameState.value.players || []).filter((p) => {
+          const st = gameState.value.presence?.[p.id]
+          return st !== 'absent'
+        })
+        const requiredVotes = activePlayers.length
+        const receivedVotes = Object.keys(gameState.value.votes || {}).filter((pid) =>
+          activePlayers.some((p) => p.id === pid),
+        ).length
+
+        console.log(
+          '[MUTEX] submitVote: голосов получено',
+          receivedVotes,
+          'ожидается',
+          requiredVotes,
+        )
+
+        if (receivedVotes >= requiredVotes && requiredVotes > 0) {
+          // Подсчёт голосов и определение лидера
+          const votesObj = gameState.value.votes ?? {}
+          const voteCounts: Record<string, number> = {}
+          Object.values(votesObj).forEach((voteArr: string[]) => {
+            voteArr.forEach((targetId) => {
+              voteCounts[targetId] = (voteCounts[targetId] || 0) + 1
+            })
+          })
+          gameState.value.voteCounts = voteCounts
+
+          const maxVotes = Math.max(0, ...Object.values(voteCounts))
+          const leaders = Object.entries(voteCounts)
+            .filter(([_, count]) => count === maxVotes && maxVotes > 0)
+            .map(([playerId]) => playerId)
+
+          gameState.value.answeringPlayerId = leaders[0] || null
+          gamePhase.value = 'answering'
+          gameState.value.phase = 'answering'
+          console.log('[MUTEX] submitVote: переход фазы -> answering')
+          broadcastGameState()
+        }
+      }
+      console.log('[MUTEX] submitVote: выходим из критической секции', voterId)
+    })
   }
 
   // Игрок делает ставку: bet — '0' | '±' | '+'
-  const submitBet = (playerId: string, bet: '0' | '±' | '+') => {
-    logAction('submit_bet', { playerId, bet })
-    if (gamePhase.value !== 'betting') return
-    if (!gameState.value.bets) gameState.value.bets = {}
+  const submitBet = async (playerId: string, bet: '0' | '±' | '+') => {
+    console.log('[MUTEX] submitBet: ожидаем мьютекс', playerId)
+    await betMutex.runExclusive(async () => {
+      console.log('[MUTEX] submitBet: вошли в критическую секцию', playerId)
+      logAction('submit_bet', { playerId, bet })
+      if (gamePhase.value !== 'betting') {
+        console.log('[MUTEX] submitBet: невалидная фаза, выход', gamePhase.value)
+        return
+      }
+      if (!gameState.value.bets) gameState.value.bets = {}
 
-    // Не даем менять ставку после первой фиксации (alreadyBet на клиенте), но защищаем и на хосте
-    if (gameState.value.bets[playerId]) return
+      // Не даем менять ставку после первой фиксации (alreadyBet на клиенте), но защищаем и на хосте
+      if (gameState.value.bets[playerId]) {
+        console.log('[MUTEX] submitBet: ставка уже есть, выход')
+        return
+      }
 
-    // Фиксируем ставку и сразу шлем обновление, чтобы UI в фазе results корректно показывал выбранное значение
-    gameState.value.bets[playerId] = bet
-    broadcastGameState()
-
-    // Если все активные игроки сделали ставку — сразу считаем и показываем результаты
-    const playersCount = gameState.value.players.length
-    const betsCount = Object.keys(gameState.value.bets).length
-
-    if (betsCount >= playersCount) {
-      logAction('bets_completed_process_round', { betsCount, playersCount })
-      debugSnapshot('before_results_after_bets')
-      processRound()
-      gamePhase.value = 'results'
-      gameState.value.phase = 'results'
+      // Фиксируем ставку и сразу шлем обновление, чтобы UI в фазе results корректно показывал выбранное значение
+      gameState.value.bets[playerId] = bet
+      gameState.value.stateVersion = (gameState.value.stateVersion || 1) + 1
       broadcastGameState()
-    }
+      console.log('[MUTEX] submitBet: после broadcastGameState')
+
+      // Если все активные игроки сделали ставку — сразу считаем и показываем результаты
+      const playersCount = gameState.value.players.length
+      const betsCount = Object.keys(gameState.value.bets).length
+
+      console.log('[MUTEX] submitBet: ставок получено', betsCount, 'ожидается', playersCount)
+
+      if (betsCount >= playersCount) {
+        logAction('bets_completed_process_round', { betsCount, playersCount })
+        debugSnapshot('before_results_after_bets')
+        processRound()
+        gamePhase.value = 'results'
+        gameState.value.phase = 'results'
+        console.log('[MUTEX] submitBet: переход фазы -> results')
+        broadcastGameState()
+      }
+      console.log('[MUTEX] submitBet: выходим из критической секции', playerId)
+    })
   }
 
   // Завершить фазу/раунд локально на стороне хоста (используется из сетевого обработчика)
@@ -676,6 +708,7 @@ export const useGameStore = defineStore('game', () => {
       currentQuestion?: string | null
       votes?: Record<string, string[]>
       bets?: Record<string, string>
+      stateVersion?: number
     }
   >({
     roomId: '',
@@ -693,6 +726,7 @@ export const useGameStore = defineStore('game', () => {
     currentQuestion: null,
     votes: {},
     bets: {},
+    stateVersion: 1,
   })
 
   // Локальные данные
@@ -807,6 +841,7 @@ export const useGameStore = defineStore('game', () => {
       )
     } catch {}
   }
+
   const myNickname = ref<string>('')
   const isHost = ref<boolean>(false)
   const hostId = ref<string>('')
@@ -1876,81 +1911,144 @@ export const useGameStore = defineStore('game', () => {
       finishRoundHostOnly(force)
     })
 
+    // Очередь для обработки голосов
+    const voteQueue: Array<() => Promise<void>> = []
+    let voteProcessing = false
+
+    async function processVoteQueue() {
+      if (voteProcessing) return
+      voteProcessing = true
+      while (voteQueue.length > 0) {
+        const fn = voteQueue.shift()
+        if (fn) {
+          await fn()
+        }
+      }
+      voteProcessing = false
+    }
+
     // Секретные/обычные голоса
     peerService.onMessage('submit_vote', (message: PeerMessage, conn: any) => {
       if (!isHost.value) return
-      // Поддерживаем оба формата: targetIds (новый) и votes (старый)
-      const m = message as Extract<PeerMessage, { type: 'submit_vote' }>
-      const voterId = (m.payload as any)?.voterId
-      const rawVotes = (m.payload as any)?.targetIds ?? (m.payload as any)?.votes
-      if (!voterId || !Array.isArray(rawVotes)) return
-      if (gamePhase.value !== 'voting' && gamePhase.value !== 'secret_voting') return
+      voteQueue.push(async () => {
+        // Поддерживаем оба формата: targetIds (новый) и votes (старый)
+        const m = message as Extract<PeerMessage, { type: 'submit_vote' }>
+        const voterId = (m.payload as any)?.voterId
+        const rawVotes = (m.payload as any)?.targetIds ?? (m.payload as any)?.votes
+        const stateVersion = (m.payload as any)?.stateVersion
+        if (!voterId || !Array.isArray(rawVotes)) return
+        if (gamePhase.value !== 'voting' && gamePhase.value !== 'secret_voting') return
 
-      // Нормализуем массив голосов (макс 2, уникальные и не голосуем за себя)
-      const uniqueVotes = Array.from(new Set(rawVotes)).slice(0, 2)
-      const validVotes = uniqueVotes.filter((id) => id && id !== voterId)
-
-      if (!gameState.value.votes) gameState.value.votes = {}
-      gameState.value.votes[voterId] = validVotes
-
-      // Инициализируем bets для следующей фазы, чтобы UI мог показывать дефолт («-») и обновлять по мере поступления ставок
-      if (!gameState.value.bets) gameState.value.bets = {}
-
-      // Обновляем агрегированные голоса для UI в реальном времени
-      const voteCounts: Record<string, number> = {}
-      Object.values(gameState.value.votes).forEach((voteArr: string[]) => {
-        voteArr.forEach((targetId) => {
-          voteCounts[targetId] = (voteCounts[targetId] || 0) + 1
-        })
-      })
-      gameState.value.voteCounts = voteCounts
-
-      // Обновляем состояние для всех клиентов, чтобы они увидели прогресс голосования
-      broadcastGameState()
-
-      // Определяем, все ли проголосовали (считаем только реально присутствующих игроков)
-      const playersCount = gameState.value.players.length
-      const votesCount = Object.keys(gameState.value.votes).length
-
-      if (votesCount >= playersCount) {
-        if (gameMode.value === 'basic') {
-          // Переход к ставкам
-          gamePhase.value = 'betting'
-          gameState.value.phase = 'betting'
-
-          // Гарантируем, что в bets есть ключи для всех игроков (значение undefined не сохраняем, UI использует bets[p.id] || '-')
-          gameState.value.players.forEach((p) => {
-            if (gameState.value.bets![p.id] === undefined) {
-              // ничего не присваиваем, просто убеждаемся, что объект существует
-            }
-          })
-
-          broadcastGameState()
-        } else {
-          // advanced: переход из secret_voting в answering выполняем ОДИН РАЗ по факту завершения голосования
-          // Защита от двойного перехода/гонок
-          if (gamePhase.value !== 'secret_voting') {
-            return
+        // Проверка версии состояния
+        if (
+          typeof stateVersion === 'number' &&
+          typeof gameState.value.stateVersion === 'number' &&
+          stateVersion !== gameState.value.stateVersion
+        ) {
+          // Версия не совпадает — отправляем ошибку клиенту
+          if (conn) {
+            peerService.sendMessage(
+              conn.peer,
+              makeMessage(
+                'connection_error',
+                {
+                  code: 'version_mismatch',
+                  message: 'Версия состояния не совпадает',
+                },
+                {
+                  roomId: gameState.value.roomId,
+                  fromId: gameState.value.hostId,
+                  ts: Date.now(),
+                },
+              ),
+            )
           }
-          if (gameState.value.answeringPlayerId) {
-            return
-          }
-
-          const maxVotes = Math.max(0, ...Object.values(voteCounts))
-          const leaders = Object.entries(voteCounts)
-            .filter(([_, c]) => c === maxVotes && maxVotes > 0)
-            .map(([pid]) => pid)
-          gameState.value.answeringPlayerId = leaders[0] || null
-
-          gamePhase.value = 'answering'
-          gameState.value.phase = 'answering'
-          broadcastGameState()
+          return
         }
-      }
+
+        // Нормализуем массив голосов (макс 2, уникальные и не голосуем за себя)
+        const uniqueVotes = Array.from(new Set(rawVotes)).slice(0, 2)
+        const validVotes = uniqueVotes.filter((id) => id && id !== voterId)
+
+        if (!gameState.value.votes) gameState.value.votes = {}
+        gameState.value.votes[voterId] = validVotes
+
+        // --- Отправляем подтверждение клиенту ---
+        if (conn) {
+          peerService.sendMessage(
+            conn.peer,
+            makeMessage(
+              'vote_ack',
+              { voterId, targetIds: validVotes },
+              {
+                roomId: gameState.value.roomId,
+                fromId: gameState.value.hostId,
+                ts: Date.now(),
+              },
+            ),
+          )
+        }
+
+        // Инициализируем bets для следующей фазы, чтобы UI мог показывать дефолт («-») и обновлять по мере поступления ставок
+        if (!gameState.value.bets) gameState.value.bets = {}
+
+        // Обновляем агрегированные голоса для UI в реальном времени
+        const voteCounts: Record<string, number> = {}
+        Object.values(gameState.value.votes).forEach((voteArr: string[]) => {
+          voteArr.forEach((targetId) => {
+            voteCounts[targetId] = (voteCounts[targetId] || 0) + 1
+          })
+        })
+        gameState.value.voteCounts = voteCounts
+
+        // Обновляем состояние для всех клиентов, чтобы они увидели прогресс голосования
+        broadcastGameState()
+
+        // Определяем, все ли проголосовали (считаем только реально присутствующих игроков)
+        const playersCount = gameState.value.players.length
+        const votesCount = Object.keys(gameState.value.votes).length
+
+        if (votesCount >= playersCount) {
+          if (gameMode.value === 'basic') {
+            // Переход к ставкам
+            gamePhase.value = 'betting'
+            gameState.value.phase = 'betting'
+
+            // Гарантируем, что в bets есть ключи для всех игроков (значение undefined не сохраняем, UI использует bets[p.id] || '-')
+            gameState.value.players.forEach((p) => {
+              if (gameState.value.bets![p.id] === undefined) {
+                // ничего не присваиваем, просто убеждаемся, что объект существует
+              }
+            })
+
+            broadcastGameState()
+          } else {
+            // advanced: переход из secret_voting в answering выполняем ОДИН РАЗ по факту завершения голосования
+            // Защита от двойного перехода/гонок
+            if (gamePhase.value !== 'secret_voting') {
+              return
+            }
+            if (gameState.value.answeringPlayerId) {
+              return
+            }
+
+            const maxVotes = Math.max(0, ...Object.values(voteCounts))
+            const leaders = Object.entries(voteCounts)
+              .filter(([_, c]) => c === maxVotes && maxVotes > 0)
+              .map(([pid]) => pid)
+            gameState.value.answeringPlayerId = leaders[0] || null
+
+            gamePhase.value = 'answering'
+            gameState.value.phase = 'answering'
+            broadcastGameState()
+          }
+        }
+      })
+      processVoteQueue()
     })
 
     // Ставки в basic
-    peerService.onMessage('submit_bet', (message: PeerMessage) => {
+    peerService.onMessage('submit_bet', (message: PeerMessage, conn: any) => {
       if (!isHost.value) return
       if (gameMode.value !== 'basic') return
       if (gamePhase.value !== 'betting') return
@@ -1985,7 +2083,7 @@ export const useGameStore = defineStore('game', () => {
     })
 
     // Ответ отвечающего (advanced)
-    peerService.onMessage('submit_answer', (message: PeerMessage) => {
+    peerService.onMessage('submit_answer', (message: PeerMessage, conn: any) => {
       if (!isHost.value) return
       if (gameMode.value !== 'advanced') return
       if (gamePhase.value !== 'answering') return
@@ -2005,7 +2103,7 @@ export const useGameStore = defineStore('game', () => {
     })
 
     // Догадки (advanced)
-    peerService.onMessage('submit_guess', (message: PeerMessage) => {
+    peerService.onMessage('submit_guess', (message: PeerMessage, conn: any) => {
       if (!isHost.value) return
       if (gameMode.value !== 'advanced') return
       if (gamePhase.value !== 'guessing') return
@@ -4284,6 +4382,7 @@ export const useGameStore = defineStore('game', () => {
 
   // Вспомогательная функция для идемпотентной отправки с ретраями (экспоненциальная задержка)
   const gotFreshState = ref(false)
+
   async function sendWithRetry(
     targetId: string,
     buildMessage: () => PeerMessage,
@@ -5053,42 +5152,136 @@ export const useGameStore = defineStore('game', () => {
     }
   }
 
+  // --- Пул отправленных событий и блокировка кнопки ---
+  const pendingEvents = ref<{ type: string; payload: any; attempts: number }[]>([])
+  const isVoteSubmitting = ref(false)
+  const isAnswerSubmitting = ref(false) // <-- Добавлено
+  const isGuessSubmitting = ref(false) // <-- Добавлено
+
   const clientSubmitVote = (votes: string[]) => {
     if (isHost.value) {
       submitVote(myPlayerId.value, votes)
     } else {
-      peerService.sendMessage(
-        hostId.value,
-        makeMessage(
-          'submit_vote',
-          { voterId: myPlayerId.value, targetIds: votes },
-          {
-            roomId: roomId.value || gameState.value.roomId,
-            fromId: myPlayerId.value,
-            ts: Date.now(),
-          },
-        ),
-      )
+      if (isVoteSubmitting.value) return
+      isVoteSubmitting.value = true
+      const event = {
+        type: 'submit_vote' as const,
+        payload: { voterId: myPlayerId.value, targetIds: votes },
+        attempts: 1,
+      }
+      pendingEvents.value.push(event)
+      sendVoteEvent(event)
     }
   }
+
+  // --- Подтверждение доставки для голосов ---
+  const voteAckMap = ref<Record<string, boolean>>({})
+
+  function sendVoteEvent(event: { type: 'submit_vote'; payload: any; attempts: number }) {
+    const voteKey = JSON.stringify(event.payload)
+    console.log('[VOTE] Отправка события голосования:', { voteKey, attempts: event.attempts })
+    peerService.sendMessage(
+      hostId.value,
+      makeMessage(
+        event.type,
+        { ...event.payload, stateVersion: gameState.value.stateVersion },
+        {
+          roomId: roomId.value || gameState.value.roomId,
+          fromId: myPlayerId.value,
+          ts: Date.now(),
+        },
+      ),
+    )
+    // Таймаут на случай отсутствия ack
+    setTimeout(() => {
+      if (!voteAckMap.value[voteKey] && pendingEvents.value.includes(event) && event.attempts < 3) {
+        event.attempts++
+        console.log('[VOTE] Повторная отправка голосования:', { voteKey, attempts: event.attempts })
+        sendVoteEvent(event)
+      } else if (!voteAckMap.value[voteKey] && pendingEvents.value.includes(event)) {
+        // Превышено число попыток — удаляем и разблокируем
+        console.warn(
+          '[VOTE] Превышено число попыток отправки голосования, удаляем из очереди:',
+          voteKey,
+        )
+        pendingEvents.value.splice(pendingEvents.value.indexOf(event), 1)
+        isVoteSubmitting.value = false
+      }
+    }, 3000)
+  }
+
+  // Обработчики ACK для ответов и догадок
+  peerService.onMessage('answer_ack' as any, (message: any) => {
+    console.log('[ACK] Получено подтверждение ответа:', message.payload);
+    isAnswerSubmitting.value = false;
+  });
+
+  peerService.onMessage('guess_ack' as any, (message: any) => {
+    console.log('[ACK] Получено подтверждение догадки:', message.payload);
+    isGuessSubmitting.value = false;
+  });
+
+  // Обработчик vote_ack на клиенте
+  peerService.onMessage('vote_ack' as any, (message: any) => {
+    const payload = message.payload || {}
+    const voteKey = JSON.stringify(payload)
+    console.log('[VOTE_ACK] Получено подтверждение голосования:', voteKey)
+    voteAckMap.value[voteKey] = true
+    // Удаляем событие из очереди и разблокируем кнопку
+    const idx = pendingEvents.value.findIndex((e) => JSON.stringify(e.payload) === voteKey)
+    if (idx !== -1) {
+      console.log('[VOTE_ACK] Удаляем событие из очереди и разблокируем кнопку:', voteKey)
+      pendingEvents.value.splice(idx, 1)
+      isVoteSubmitting.value = false
+    } else {
+      console.warn('[VOTE_ACK] Подтверждение получено, но событие не найдено в очереди:', voteKey)
+    }
+  })
+
+  // --- Пул отправленных ставок и блокировка кнопки ---
+  const pendingBets = ref<{ type: string; payload: any; attempts: number }[]>([])
+  const isBetSubmitting = ref(false)
 
   const clientSubmitBet = (bet: '0' | '±' | '+') => {
     if (isHost.value) {
       submitBet(myPlayerId.value, bet)
     } else {
-      peerService.sendMessage(
-        hostId.value,
-        makeMessage(
-          'submit_bet',
-          { playerId: myPlayerId.value, bet },
-          {
-            roomId: roomId.value || gameState.value.roomId,
-            fromId: myPlayerId.value,
-            ts: Date.now(),
-          },
-        ),
-      )
+      if (isBetSubmitting.value) return
+      isBetSubmitting.value = true
+      const event = {
+        type: 'submit_bet' as const,
+        payload: { playerId: myPlayerId.value, bet },
+        attempts: 1,
+      }
+      pendingBets.value.push(event)
+      sendBetEvent(event)
     }
+  }
+
+  function sendBetEvent(event: { type: 'submit_bet'; payload: any; attempts: number }) {
+    peerService.sendMessage(
+      hostId.value,
+      makeMessage(
+        event.type,
+        { ...event.payload, stateVersion: gameState.value.stateVersion },
+        {
+          roomId: roomId.value || gameState.value.roomId,
+          fromId: myPlayerId.value,
+          ts: Date.now(),
+        },
+      ),
+    )
+    // Таймаут на случай отсутствия ответа
+    setTimeout(() => {
+      if (pendingBets.value.includes(event) && event.attempts < 3) {
+        event.attempts++
+        sendBetEvent(event)
+      } else if (pendingBets.value.includes(event)) {
+        // Превышено число попыток — удаляем и разблокируем
+        pendingBets.value.splice(pendingBets.value.indexOf(event), 1)
+        isBetSubmitting.value = false
+      }
+    }, 3000)
   }
 
   const clientSubmitAnswer = (answer: string) => {
@@ -5123,7 +5316,11 @@ export const useGameStore = defineStore('game', () => {
     }
   }
 
+  // --- Пул отправленных догадок и блокировка кнопки ---
+  const pendingGuesses = ref<{ type: string; payload: any; attempts: number }[]>([])
+
   const clientSubmitGuess = (guess: string) => {
+    if (isGuessSubmitting.value) return; // <-- Добавлено
     if (isHost.value) {
       if (!gameState.value.guesses) gameState.value.guesses = {}
       gameState.value.guesses[myPlayerId.value] = guess
@@ -5131,19 +5328,42 @@ export const useGameStore = defineStore('game', () => {
       logAction('advanced_guess_submitted', { guessFor: myPlayerId.value })
       debugSnapshot('after_guess_submit')
     } else {
-      peerService.sendMessage(
-        hostId.value,
-        makeMessage(
-          'submit_guess',
-          { playerId: myPlayerId.value, guess },
-          {
-            roomId: roomId.value || gameState.value.roomId,
-            fromId: myPlayerId.value,
-            ts: Date.now(),
-          },
-        ),
-      )
+      if (isGuessSubmitting.value) return
+      isGuessSubmitting.value = true
+      const event = {
+        type: 'submit_guess' as const,
+        payload: { playerId: myPlayerId.value, guess },
+        attempts: 1,
+      }
+      pendingGuesses.value.push(event)
+      sendGuessEvent(event)
     }
+  }
+
+  function sendGuessEvent(event: { type: 'submit_guess'; payload: any; attempts: number }) {
+    peerService.sendMessage(
+      hostId.value,
+      makeMessage(
+        event.type,
+        { ...event.payload, stateVersion: gameState.value.stateVersion },
+        {
+          roomId: roomId.value || gameState.value.roomId,
+          fromId: myPlayerId.value,
+          ts: Date.now(),
+        },
+      ),
+    )
+    // Таймаут на случай отсутствия ответа
+    setTimeout(() => {
+      if (pendingGuesses.value.includes(event) && event.attempts < 3) {
+        event.attempts++
+        sendGuessEvent(event)
+      } else if (pendingGuesses.value.includes(event)) {
+        // Превышено число попыток — удаляем и разблокируем
+        pendingGuesses.value.splice(pendingGuesses.value.indexOf(event), 1)
+        isGuessSubmitting.value = false
+      }
+    }, 3000)
   }
 
   // Любой игрок (хост или клиент) может запросить следующий раунд после консенсуса
@@ -5649,6 +5869,10 @@ export const useGameStore = defineStore('game', () => {
     gameMode,
     gamePhase,
     uiConnecting,
+    // Submission flags for UI
+    isVoteSubmitting,
+    isAnswerSubmitting,
+    isGuessSubmitting,
     // Presence helpers for UI
     isCurrentUserAbsent,
     ariaAnnounce,
