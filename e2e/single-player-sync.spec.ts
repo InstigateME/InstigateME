@@ -12,8 +12,10 @@ test.describe('Мультиплеер: базовый синхро-сценар�
 
   let players: MultiClient
 
-  test.beforeEach(async ({ browser }) => {
-    players = await createPlayers(browser, '', 4)
+  test.beforeEach(async ({ browser }, testInfo) => {
+    const isSingleMonitor = testInfo.project.metadata?.singleMonitor
+    const screenSize = isSingleMonitor ? { width: 755, height: 390 } : undefined // MacBook Pro 14"
+    players = await createPlayers(browser, '', 4, screenSize)
   })
 
   test.afterEach(async () => {
@@ -21,19 +23,20 @@ test.describe('Мультиплеер: базовый синхро-сценар�
   })
 
   test('4 клиента: вход, одинаковое состояние, ходы по кругу, синхронизация и завершение раунда', async () => {
-    // 1) Первый игрок (A) на главной вводит имя "Player A" и создаёт комнату
+    // === ЮЗКЕЙС 1: СОЗДАНИЕ И ПОДКЛЮЧЕНИЕ КОМНАТЕ ===
+    // Проверяется:
+    // - Создание комнаты хостом
+    // - Подключение остальных игроков по ID
+    // - Отображение и консистентность списка игроков
+    // Первый игрок (A) на главной вводит имя "Player A" и создаёт комнату
     const host = players.get('p1').page
     await host.goto('/', { waitUntil: 'domcontentloaded' })
-    // Вводим имя
     await host.getByTestId('nickname-input').fill('Player A')
-    // Жмём кнопку создания комнаты по data-test атрибуту
     await host.getByTestId('create-room-button').click()
-    // Ждём появления раздела лобби и текста "ID комнаты для подключения:"
     await host.waitForSelector('text=ID комнаты для подключения:', { timeout: 15000 })
-    // Считываем ID хоста
     const hostId = await host.locator('.room-id').first().innerText()
 
-    // 2) Остальные вводят имена и подключаются по коду hostId
+    // Остальные вводят имена и подключаются по коду hostId
     const nicknames: Record<PlayerId, string> = {
       p1: 'Player A',
       p2: 'Player B',
@@ -44,7 +47,6 @@ test.describe('Мультиплеер: базовый синхро-сценар�
       const pN = players.get(pid).page
       await pN.goto('/', { waitUntil: 'domcontentloaded' })
       await pN.getByTestId('nickname-input').fill(nicknames[pid])
-      // Вводим код комнаты в поле по data-test и жмём кнопку подключения по data-test
       const roomInput = pN.getByTestId('join-room-input')
       if (await roomInput.count()) {
         await roomInput.fill(hostId)
@@ -57,18 +59,18 @@ test.describe('Мультиплеер: базовый синхро-сценар�
       }
     }
 
-    // 3) Ждём пока у всех прогрузится UI лобби и список игроков станет видимым
+    // Проверка, что у всех прогрузился UI лобби и список игроков видим
     await players.each(async ({ page }: { page: Page }) => {
       await page.getByTestId('players-list').waitFor({ state: 'visible', timeout: 15000 })
       await expect(page.locator('.players-list')).toBeVisible()
     })
 
-    // Небольшая задержка для стаба синхронизации
+    // Стаб синхронизации
     await players.each(async ({ page }: { page: Page }) => {
       await page.waitForTimeout(500)
     })
 
-    // 4) Собираем имена игроков с каждой страницы
+    // Проверка консистентности списка игроков
     const lists = await Promise.all(
       players.clients.map(async ({ page, id }: { page: Page; id: string }) => {
         const names: string[] = await page.locator('.players-list .player-name').allInnerTexts()
@@ -82,74 +84,66 @@ test.describe('Мультиплеер: базовый синхро-сценар�
 
     const expected = ['Player A', 'Player B', 'Player C', 'Player D'].sort()
 
-    // Проверяем, что у каждого клиента одинаковый и полный список игроков
     for (const { id, names } of lists) {
       expect.soft(names, `Неверный список у клиента ${id}`).toEqual(expected)
     }
 
-    // Проверяем межклиентную консистентность попарно
     for (let i = 1; i < lists.length; i++) {
       expect
         .soft(lists[i].names, `Списки клиентов расходятся: ${lists[0].id} vs ${lists[i].id}`)
         .toEqual(lists[0].names)
     }
 
-    // 5) Хост нажимает на кнопку начала игры
+    // === ЮЗКЕЙС 2: СТАРТ ИГРЫ И НАЧАЛО РАУНДА ===
+    // Проверяется:
+    // - Запуск игры хостом
+    // - Начало первого раунда
     await host.getByTestId('start-game-button').click()
 
-    // 6) Игрок "Вытягивает карту" и начинает ход
+    // === ЮЗКЕЙС 3: ДЕЙСТВИЯ В РАУНДЕ (ГОЛОСОВАНИЕ, СТАВКИ, СИНХРОНИЗАЦИЯ) ===
+    // Проверяется:
+    // - Игрок тянет карту и начинает ход
+    // - Голосование всех игроков
+    // - Ставки всех игроков
+    // - Синхронизация состояния между клиентами
     await host.getByTestId('action-primary').click()
 
-    // 7) Тестирование голосования
+    // --- Голосование ---
     for (const { page } of players.clients) {
       const phaseVoting = page.getByTestId('phase-voting')
-
-      // Ждём появления UI голосования
       await phaseVoting.waitFor({ state: 'visible', timeout: 15000 })
-
-      // Проверяем, что кнопки игроков отображаются
       const voteButtons = phaseVoting.getByTestId('players-list-voting').locator('.vote-chip')
-      await expect(voteButtons).toHaveCount(3) // 3 других игрока
-
-      // Выбираем двух игроков
+      await expect(voteButtons).toHaveCount(3)
       await voteButtons.nth(0).click()
       await voteButtons.nth(1).click()
-
-      // Проверяем, что кнопка "Отправить голос" активна
       const submitButton = page.getByTestId('vote-submit')
       await submitButton.waitFor({ state: 'visible', timeout: 15000 })
-      await submitButton.waitFor({ state: 'attached', timeout: 15000 })
-      await expect(submitButton).toBeVisible({ timeout: 15000 })
-      await expect(submitButton).toBeEnabled({ timeout: 15000 })
-      await submitButton.click({ delay: 1500 })
+      await submitButton.click()
     }
 
+    // --- Ставки ---
     for (const { page } of players.clients) {
-      // Проверяем, что кнопки ставок отображаются и активны
       await page.getByTestId('players-list-bet').waitFor({ state: 'visible', timeout: 15000 })
       const betChipButton = page.getByTestId('players-list-bet').locator('.bet-chip')
       await expect(betChipButton).toHaveCount(3)
       await betChipButton.nth(2).click()
-
-      // Проверяем, что кнопка "Сделать ставку" активна
       const submitBetButton = page.getByTestId('bet-submit')
       await submitBetButton.waitFor({ state: 'visible', timeout: 15000 })
-      await submitBetButton.waitFor({ state: 'attached', timeout: 15000 })
-      await expect(submitBetButton).toBeVisible({ timeout: 15000 })
-      await expect(submitBetButton).toBeEnabled({ timeout: 15000 })
-      await submitBetButton.click({ delay: 1500 })
+      await submitBetButton.click()
     }
 
-    // 8) Проверяем, что состояние синхронизируется между клиентами
+    // --- Проверка синхронизации результатов ---
     await players.each(async ({ page }: { page: Page }) => {
       const votedNote = page.getByTestId('phase-results')
       await expect(votedNote).toBeVisible()
     })
 
-    // 9) Переходим на следующий раунд, что кнопка "Следующий раунд" доступна
+    // === ЮЗКЕЙС 4: ПЕРЕХОД К СЛЕДУЮЩЕМУ РАУНДУ ===
+    // Проверяется:
+    // - Переход к следующему раунду
+    // - Обновление UI у всех клиентов
     await host.getByTestId('next-round-btn').click()
 
-    // 10) Проверяем, что все клиенты видят новый раунд и UI обновился
     await players.each(async ({ page }: { page: Page }) => {
       const votedNote = page.getByTestId('phase-drawing-question')
       await expect(votedNote).toBeVisible()
@@ -162,44 +156,39 @@ test.describe('Мультиплеер: базовый синхро-сценар�
       }
     })
 
-    // 10) Тестирование голосования
+    // === ЮЗКЕЙС 5: ПОВТОР РАУНДА (ГОЛОСОВАНИЕ, ОТВЕТЫ, УГАДЫВАНИЯ, ВЫБОР ПОБЕДИТЕЛЕЙ) ===
+    // Проверяется:
+    // - Голосование
+    // - Ответы игроков
+    // - Угадывания
+    // - Выбор победителей
+    // - Синхронизация результатов
+    // --- Голосование ---
     for (const { page } of players.clients) {
       const phaseVoting = page.getByTestId('phase-voting')
-
-      // Ждём появления UI голосования
       await phaseVoting.waitFor({ state: 'visible', timeout: 15000 })
-
-      // Проверяем, что кнопки игроков отображаются
       const voteButtons = phaseVoting.getByTestId('players-list-voting').locator('.vote-chip')
-      await expect(voteButtons).toHaveCount(3) // 3 других игрока
-
-      // Выбираем двух игроков
+      await expect(voteButtons).toHaveCount(3)
       await voteButtons.nth(0).click()
       await voteButtons.nth(1).click()
-
-      // Проверяем, что кнопка "Отправить голос" активна
       const submitButton = page.getByTestId('vote-submit')
       await submitButton.waitFor({ state: 'visible', timeout: 15000 })
-      await submitButton.waitFor({ state: 'attached', timeout: 15000 })
-      await expect(submitButton).toBeVisible({ timeout: 15000 })
-      await expect(submitButton).toBeEnabled({ timeout: 15000 })
-      await submitButton.click({ delay: 1500 })
+      await submitButton.click()
     }
 
+    // --- Ответы игроков ---
     await players.each(async ({ page }: { page: Page }) => {
       const votedNote = page.getByTestId('phase-answering')
       await expect(votedNote).toBeVisible()
     })
 
-    let pageSetAnswering: Page
+    let pageSetAnswering: Page | undefined
     await players.each(async ({ page }: { page: Page }) => {
       const actionPrimary = page.getByTestId('answering-textarea')
-      if (!(await actionPrimary.isVisible())) {
-        return
+      if (await actionPrimary.isVisible()) {
+        pageSetAnswering = page
       }
-      pageSetAnswering = page
     })
-    // eslint-disable-next-line playwright/no-conditional-in-test
     if (!pageSetAnswering) {
       throw new Error('Не удалось найти страницу с полем для ответа')
     }
@@ -208,43 +197,34 @@ test.describe('Мультиплеер: базовый синхро-сценар�
 
     const submitAnswering = pageSetAnswering.getByTestId('answering-submit')
     await submitAnswering.waitFor({ state: 'visible', timeout: 15000 })
-    await submitAnswering.waitFor({ state: 'attached', timeout: 15000 })
-    await expect(submitAnswering).toBeVisible({ timeout: 15000 })
-    await expect(submitAnswering).toBeEnabled({ timeout: 15000 })
-    await submitAnswering.click({ delay: 1500 })
+    await submitAnswering.click()
 
     await pageSetAnswering.locator('.guessing-wait').waitFor({ state: 'visible', timeout: 15000 })
 
+    // --- Угадывания ---
     for (const { page } of players.clients) {
       const actionPrimary = page.locator('.guessing-textarea')
-      // eslint-disable-next-line playwright/no-conditional-in-test
       if (!(await actionPrimary.isVisible())) {
         continue
       }
-
       await page.locator('.guessing-textarea').fill('Test answer')
-
       const guessingAnswering = page.locator('.guessing-submit')
       await guessingAnswering.waitFor({ state: 'visible', timeout: 15000 })
-      await guessingAnswering.waitFor({ state: 'attached', timeout: 15000 })
-      await expect(guessingAnswering).toBeVisible({ timeout: 15000 })
-      await expect(guessingAnswering).toBeEnabled({ timeout: 15000 })
-      await guessingAnswering.click({ delay: 1500 })
+      await guessingAnswering.click()
     }
 
     await pageSetAnswering.locator('.winners-select').waitFor({ state: 'visible', timeout: 15000 })
 
+    // --- Выбор победителей ---
     const buttonWinnerChip = pageSetAnswering.locator('.winners-select .winner-chip')
     await buttonWinnerChip.nth(0).click()
     await buttonWinnerChip.nth(1).click()
 
     const submitWinnersConfirm = pageSetAnswering.locator('.winners-confirm')
     await submitWinnersConfirm.waitFor({ state: 'visible', timeout: 15000 })
-    await submitWinnersConfirm.waitFor({ state: 'attached', timeout: 15000 })
-    await expect(submitWinnersConfirm).toBeVisible({ timeout: 15000 })
-    await expect(submitWinnersConfirm).toBeEnabled({ timeout: 15000 })
-    await submitWinnersConfirm.click({ delay: 1500 })
+    await submitWinnersConfirm.click()
 
+    // --- Проверка синхронизации результатов ---
     await players.each(async ({ page }: { page: Page }) => {
       const votedNote = page.getByTestId('phase-results')
       await expect(votedNote).toBeVisible()

@@ -34,23 +34,31 @@ export async function createPlayerContext(
   _browser: Browser,
   baseURL: string,
   id: AnyPlayerId,
+  screenSize?: { width: number; height: number },
 ): Promise<PlayerClient> {
   // Размеры окна для каждого игрока
-  const width = 960
-  const height = 620
+  const width = screenSize?.width || 960
+  const height = screenSize?.height || 620
   // Запускаем отдельный процесс Chromium на игрока с нужной позицией и размером окна.
   // Переводим окна на второй монитор: основной 1920x1080 слева, второй справа 2560x1440.
   // Базовая точка второго монитора: X=1920, Y=0. Раскладываем игроков «сеткой».
-  const baseLeft = 1920
-  const baseTop = 0
-  const gapX = 50
+  const baseLeft = screenSize ? 0 : 1920
+  const baseTop = screenSize ? 0 : 0
+  const gapX = 0
   const gapY = 120
-  const positions: [number, number][] = [
-    [baseLeft + 0, baseTop + 0],
-    [baseLeft + width + gapX, baseTop + 0],
-    [baseLeft + 0, baseTop + height + gapY],
-    [baseLeft + width + gapX, baseTop + height + gapY],
-  ]
+  const positions: [number, number][] = screenSize
+    ? [
+        [0, 0],
+        [width + gapX, 0],
+        [0, height + gapY],
+        [width + gapX, height + gapY],
+      ]
+    : [
+        [baseLeft + 0, baseTop + 0],
+        [baseLeft + width + gapX, baseTop + 0],
+        [baseLeft + 0, baseTop + height + gapY],
+        [baseLeft + width + gapX, baseTop + height + gapY],
+      ]
   const match = String(id).match(/^p(\d+)$/)
   const idx = (match ? Math.max(1, parseInt(match[1], 10)) : 1) - 1 // 0-based
   const [left, top] = positions[idx] ?? positions[0]
@@ -137,6 +145,7 @@ export async function createPlayers(
   browser: Browser,
   baseURL: string,
   numPlayers: number = 1,
+  screenSize?: { width: number; height: number },
 ): Promise<MultiClient> {
   // Всегда используем числовые id p1..pN
   const ids: AnyPlayerId[] = Array.from(
@@ -145,7 +154,7 @@ export async function createPlayers(
   )
   // Создаём все контексты параллельно, сохраняя порядок p1..pN
   const instances: PlayerClient[] = await Promise.all(
-    ids.map((id) => createPlayerContext(browser, baseURL, id)),
+    ids.map((id) => createPlayerContext(browser, baseURL, id, screenSize)),
   )
 
   // Выполняем операции над игроками параллельно, чтобы ускорить тесты
