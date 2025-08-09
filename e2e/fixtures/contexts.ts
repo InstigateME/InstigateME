@@ -38,14 +38,14 @@ export async function createPlayerContext(
 ): Promise<PlayerClient> {
   // Размеры окна для каждого игрока
   const width = screenSize?.width || 960
-  const height = screenSize?.height || 620
+  const height = screenSize?.height || 630
   // Запускаем отдельный процесс Chromium на игрока с нужной позицией и размером окна.
   // Переводим окна на второй монитор: основной 1920x1080 слева, второй справа 2560x1440.
   // Базовая точка второго монитора: X=1920, Y=0. Раскладываем игроков «сеткой».
   const baseLeft = screenSize ? 0 : 1920
   const baseTop = screenSize ? 0 : 0
   const gapX = 0
-  const gapY = 120
+  const gapY = 100
   const positions: [number, number][] = screenSize
     ? [
         [0, 0],
@@ -145,17 +145,21 @@ export async function createPlayers(
   browser: Browser,
   baseURL: string,
   numPlayers: number = 1,
-  screenSize?: { width: number; height: number },
+  isSingleMonitor?: boolean,
 ): Promise<MultiClient> {
+  const screenSize = isSingleMonitor ? { width: 755, height: 390 } : undefined
+
   // Всегда используем числовые id p1..pN
   const ids: AnyPlayerId[] = Array.from(
     { length: Math.max(0, numPlayers) },
     (_, i) => `p${i + 1}` as `p${number}`,
   )
   // Создаём все контексты параллельно, сохраняя порядок p1..pN
+  console.time('⏱️ Creating player contexts')
   const instances: PlayerClient[] = await Promise.all(
     ids.map((id) => createPlayerContext(browser, baseURL, id, screenSize)),
   )
+  console.timeEnd('⏱️ Creating player contexts')
 
   // Выполняем операции над игроками параллельно, чтобы ускорить тесты
   const each = async (fn: (c: PlayerClient, index: number) => Promise<unknown> | unknown) => {

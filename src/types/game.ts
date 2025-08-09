@@ -37,8 +37,8 @@ export interface GameState {
   gameMode?: GameMode
   phase?: GamePhase
 
-  questionCards: string[] // Карточки с вопросами
-  currentQuestion?: string | null
+  questionIndices?: number[] // Индексы вопросов (перемешанная колода)
+  currentQuestion?: number | null
 
   // Ход/очередность
   currentTurn?: number // Индекс текущего игрока (совместимость со старым кодом)

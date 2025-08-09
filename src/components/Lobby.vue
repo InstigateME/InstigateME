@@ -129,7 +129,6 @@ const router = useRouter()
 const gameStore = useGameStore()
 
 const qrCanvas = ref<HTMLCanvasElement>()
-const copied = ref(false)
 const copiedHostId = ref(false)
 const errorMessage = ref('')
 const linkCopied = ref(false)
@@ -152,19 +151,6 @@ const generateQRCode = async () => {
     })
   } catch (error) {
     console.error('Failed to generate QR code:', error)
-  }
-}
-
-// Копирование ID комнаты
-const copyRoomId = async () => {
-  try {
-    await navigator.clipboard.writeText(gameStore.gameState.roomId)
-    copied.value = true
-    setTimeout(() => {
-      copied.value = false
-    }, 2000)
-  } catch (error) {
-    console.error('Failed to copy room ID:', error)
   }
 }
 
@@ -210,10 +196,15 @@ const leaveRoom = () => {
   // Сразу уходим на главную
   router.push('/')
 
-  // В фоне уведомляем хоста и закрываем соединение
+  // В фоне уведомляем и закрываем соединение
   ;(async () => {
     try {
-      await gameStore.leaveGracefully()
+      // Хост и клиенты используют разную логику выхода
+      if (gameStore.isHost) {
+        gameStore.leaveRoom()
+      } else {
+        await gameStore.leaveGracefully()
+      }
     } catch {
       // Fallback на случай ошибки сети
       try {
@@ -231,6 +222,26 @@ watch(
       router.push('/game')
     }
   },
+)
+
+// Отслеживание изменения хоста - регенерация QR кода для нового хоста
+watch(
+  () => gameStore.isHost,
+  async (isHost) => {
+    if (isHost && gameStore.connectionStatus === 'connected' && gameStore.gameState.hostId) {
+      await generateQRCode()
+    }
+  }
+)
+
+// Отслеживание изменения hostId - регенерация QR кода
+watch(
+  () => gameStore.gameState.hostId,
+  async (hostId) => {
+    if (gameStore.isHost && gameStore.connectionStatus === 'connected' && hostId) {
+      await generateQRCode()
+    }
+  }
 )
 
 onMounted(async () => {

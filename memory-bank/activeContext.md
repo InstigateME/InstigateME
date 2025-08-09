@@ -1,16 +1,23 @@
 # Active Context
 
 ## Текущий фокус
-- Очистка результатов предыдущего голосования перед началом нового голосования/раунда.
-- Стабильность PeerJS и восстановление соединений: детерминированная смена/восстановление хоста, корректный discovery.
+- Подготовка к фиксации текущих uncommitted изменений в e2e/lobby-4players.spec.ts, src/components/Lobby.vue, и src/stores/gameStore.ts
+- Очистка результатов предыдущего голосования перед началом нового голосования/раунда (реализовано)
+- Стабильность PeerJS и восстановление соединений: детерминированная смена/восстановление хоста, корректный discovery (реализовано)
 
 ## Недавние изменения
-- src/stores/gameStore.ts:
-  - Добавлен метод resetVotingState(), который очищает:
-    - gameState.votes, gameState.voteCounts, gameState.bets.
-    - Для режима advanced дополнительно: gameState.guesses, gameState.roundWinners, gameState.answeringPlayerId, gameState.advancedAnswer.
-  - В drawCard() метод resetVotingState() вызывается сразу после установки нового вопроса и рассылки состояния в фазе drawing_question, но до переключения фазы на voting/secret_voting. Это гарантирует, что старые выборы/ставки не попадут в новый раунд.
-  - Сохранена очистка раундовых данных в finishRoundHostOnly() при переходе из results/advanced_results к следующему раунду, чтобы итоги были доступны на экране результатов.
+
+### CLAUDE.md и настройки документации (коммит 3d27ca9)
+- Создан полный CLAUDE.md с архитектурной документацией для Claude Code
+- Добавлен .claude/settings.local.json для разрешений E2E тестов
+- Обновлен progress.md с актуальной дорожной картой
+
+### Предыдущие изменения в gameStore.ts (реализовано):
+- Добавлен метод resetVotingState(), который очищает:
+  - gameState.votes, gameState.voteCounts, gameState.bets.
+  - Для режима advanced дополнительно: gameState.guesses, gameState.roundWinners, gameState.answeringPlayerId, gameState.advancedAnswer.
+- В drawCard() метод resetVotingState() вызывается сразу после установки нового вопроса и рассылки состояния в фазе drawing_question, но до переключения фазы на voting/secret_voting. Это гарантирует, что старые выборы/ставки не попадут в новый раунд.
+- Сохранена очистка раундовых данных в finishRoundHostOnly() при переходе из results/advanced_results к следующему раунду, чтобы итоги были доступны на экране результатов.
 
 - Ранее (актуально для контекста):
   - Введены базовая/advanced колоды (basicDeck/advancedDeck) и строгое чередование режимов по раундам.
@@ -21,12 +28,14 @@
 - «Перед голосованием надо очищать результат, чтобы старый выбор не учитывался в новом раунде» — реализовано через resetVotingState() и вызов перед фазой голосования.
 
 ## Следующие шаги
-- Проверить UI-ф low:
+- Зафиксировать текущие uncommitted изменения (e2e/lobby-4players.spec.ts, src/components/Lobby.vue, src/stores/gameStore.ts)
+- Продолжить работу над unit-тестами для gameStore (переходы фаз, консенсус, миграция хоста)
+- Завершить UI индикаторы статусов соединения/переподключения
+- Проверить UI-flow:
   1) Новый вопрос тянется (drawing_question) → при переходе в voting/secret_voting старые голоса/ставки отсутствуют.
   2) В advanced убедиться, что прежние guesses/roundWinners/answeringPlayerId/advancedAnswer не переносятся между раундами.
-- Визуально проверить GameField.vue на предмет отсутствия артефактов старого состояния в новом голосовании.
 
-Date: 2025-08-06
+Date: 2025-08-09
 
 ## Обновление: стабильность PeerJS, потеря связи и восстановление (контекст)
 Корневая причина:

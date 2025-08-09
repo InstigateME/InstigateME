@@ -45,13 +45,13 @@ export default defineConfig({
 
   /* Configure projects for major browsers */
   projects: [
-    {
-      name: 'single-monitor',
-      metadata: { singleMonitor: true },
-      use: {
-        ...devices['Desktop Chrome'],
-      },
-    },
+    // {
+    //   name: 'single-monitor',
+    //   metadata: { singleMonitor: true },
+    //   use: {
+    //     ...devices['Desktop Chrome'],
+    //   },
+    // },
     {
       name: 'chromium',
       use: {

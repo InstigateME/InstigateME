@@ -615,9 +615,17 @@ const currentTurnName = computed(
 )
 
 // Данные раундов
-const currentQuestion = computed(
-  () => gameStore.gameState.currentQuestion as string | null | undefined,
-)
+import questionsData from '@/data/questions'
+
+const currentQuestion = computed(() => {
+  const idx = gameStore.gameState.currentQuestion
+  if (typeof idx !== 'number') return null
+  const mode = gameStore.gameState.gameMode ?? gameStore.gameMode
+  if (mode === 'advanced') {
+    return questionsData.questionsAdvanced?.[idx] ?? null
+  }
+  return questionsData.questionsBasic?.[idx] ?? null
+})
 const votes = computed<Record<string, string[]>>(
   () => (gameStore.gameState.votes || {}) as Record<string, string[]>,
 )

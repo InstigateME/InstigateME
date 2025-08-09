@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run test:e2e:*)",
+      "Bash(npm run lint)",
+      "Bash(npm run build:*)",
+      "Bash(cp:*)",
+      "Bash(npm run type-check:*)",
+      "Bash(playwright test:*)",
+      "Bash(grep:*)",
+      "Bash(npx playwright test:*)"
+    ],
+    "deny": []
+  }
+}

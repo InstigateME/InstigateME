@@ -7,22 +7,35 @@ import { createPlayers, MultiClient, PlayerId } from './fixtures/contexts.js'
  * Используются data-testid из компонентов Lobby.vue/GameField.vue.
  */
 
-test.describe('Мультиплеер: базовый синхро-сценарий на 4 игроков', () => {
+test.describe('Мультиплеер: базовый асинхро-сценарий на 4 игроков', () => {
   test.setTimeout(12_000_000)
 
   let players: MultiClient
 
   test.beforeEach(async ({ browser }, testInfo) => {
     const isSingleMonitor = testInfo.project.metadata?.singleMonitor
-    const screenSize = isSingleMonitor ? { width: 755, height: 390 } : undefined // MacBook Pro 14"
-    players = await createPlayers(browser, '', 4, screenSize)
+    players = await createPlayers(browser, '', 4, isSingleMonitor)
   })
 
   test.afterEach(async () => {
     await players?.closeAll()
   })
 
-  test('4 клиента: вход, одинаковое состояние, ходы по кругу, синхронизация и завершение раунда', async () => {
+  test('4 клиента: вход, одинаковое состояние, ходы по кругу, синхронизация и завершение раунда, aсинхронно', async () => {
+    // Подписка на события консоли для всех клиентов
+    players.each(({ page, id }) => {
+      page.on('console', (msg) => {
+        console.log(`[${id}] [${msg.type()}] ${msg.text()}`)
+        for (const arg of msg.args()) {
+          arg.jsonValue().then((value) => {
+            if (typeof value === 'object' && value !== null) {
+              console.log(`[${id}]   аргумент:`, JSON.stringify(value))
+            }
+          })
+        }
+      })
+    })
+
     // === ЮЗКЕЙС 1: СОЗДАНИЕ И ПОДКЛЮЧЕНИЕ КОМНАТЕ ===
     // Проверяется:
     // - Создание комнаты хостом

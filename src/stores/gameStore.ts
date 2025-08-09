@@ -182,35 +182,29 @@ export const useGameStore = defineStore('game', () => {
     gameState.value.gameMode = currentMode.value
   }
 
-  // Две независимые колоды вопросов на игру (перетасовываются один раз при старте)
-  const basicDeck = ref<string[]>([])
-  const advancedDeck = ref<string[]>([])
+  // Две независимые колоды индексов вопросов на игру (перетасовываются один раз при старте)
+  const basicDeck = ref<number[]>([])
+  const advancedDeck = ref<number[]>([])
 
-  // Вопросы импортируются динамически в initializeGame из '@/data/questions.ts'
+  // Индексы вопросов импортируются динамически в initializeGame из '@/data/questions.ts'
 
   const initializeGame = async (mode: 'basic' | 'advanced' = 'basic') => {
-    // Начинаем строго из лобби, но не выставляем gameStarted тут (делаем это в startGame последовательно)
     gamePhase.value = 'lobby'
     gameMode.value = mode
-
-    // Явно фиксируем режим/фазу и новые поля и в GameState
     gameState.value.gameMode = mode
     gameState.value.phase = 'lobby'
 
-    // Загружаем вопросы из TypeScript-модуля с двумя наборами и формируем две независимые колоды
     try {
       const mod = await import('@/data/questions')
-      // Согласно файлу src/data/questions.ts экспорт по умолчанию содержит:
-      // { questionsBasic: whoIsItQuestions, questionsAdvanced: answerItQuestions }
       const questionsBasic = Array.isArray(mod?.default?.questionsBasic)
-        ? mod.default.questionsBasic.slice()
+        ? mod.default.questionsBasic
         : []
       const questionsAdvanced = Array.isArray(mod?.default?.questionsAdvanced)
-        ? mod.default.questionsAdvanced.slice()
+        ? mod.default.questionsAdvanced
         : []
 
-      // Перемешиваем каждую колоду отдельно один раз при старте игры (Fisher–Yates)
-      const fyShuffle = (arr: string[]) => {
+      // Генерируем массив индексов и перемешиваем
+      const fyShuffle = (arr: number[]) => {
         for (let i = arr.length - 1; i > 0; i--) {
           const j = Math.floor(Math.random() * (i + 1))
           ;[arr[i], arr[j]] = [arr[j], arr[i]]
@@ -218,18 +212,16 @@ export const useGameStore = defineStore('game', () => {
         return arr
       }
 
-      basicDeck.value = fyShuffle(questionsBasic)
-      advancedDeck.value = fyShuffle(questionsAdvanced)
+      basicDeck.value = fyShuffle([...Array(questionsBasic.length).keys()])
+      advancedDeck.value = fyShuffle([...Array(questionsAdvanced.length).keys()])
 
-      // Отображаем в gameState текущую активную колоду для совместимости с существующим UI
-      gameState.value.questionCards =
+      // В state храним только индексы активной колоды
+      gameState.value.questionIndices =
         currentMode.value === 'basic' ? basicDeck.value.slice() : advancedDeck.value.slice()
     } catch {
-      // Если не удалось загрузить вопросы — оставляем пустые колоды,
-      // чтобы UI явно показал отсутствие данных вместо плейсхолдеров.
       basicDeck.value = []
       advancedDeck.value = []
-      gameState.value.questionCards = []
+      gameState.value.questionIndices = []
     }
 
     // Инициализация карт и очков
@@ -269,7 +261,7 @@ export const useGameStore = defineStore('game', () => {
     gameState.value.phase = 'drawing_question'
     {
       const activeDeckRef = currentMode.value === 'basic' ? basicDeck : advancedDeck
-      gameState.value.questionCards = activeDeckRef.value.slice()
+      gameState.value.questionIndices = activeDeckRef.value.slice()
     }
   }
 
@@ -377,67 +369,58 @@ export const useGameStore = defineStore('game', () => {
 
   const drawCard = async (requesterId?: string | null) => {
     logAction('drawCard_request', { requesterId })
-    // Действие разрешено только в фазе вытягивания вопроса
     if (gamePhase.value !== 'drawing_question') return null
 
     const currentTurnPid = gameState.value.currentTurnPlayerId
     if (!currentTurnPid) return null
 
-    // Если вызвано локально у хоста (например, сам хост в свой ход), разрешаем.
-    // Если вызвано по сети (requesterId передан), проверяем, что именно текущий игрок запросил действие.
     if (requesterId && requesterId !== currentTurnPid) return null
 
-    // Определяем активную колоду по текущему режиму
     const activeDeckRef = currentMode.value === 'basic' ? basicDeck : advancedDeck
 
-    // Если активная колода пуста — перетасовываем заново, как согласовано
+    // Если активная колода пуста — перетасовываем заново
     if (activeDeckRef.value.length === 0) {
       try {
         const mod = await import('@/data/questions')
         const source =
           currentMode.value === 'basic'
             ? Array.isArray(mod?.default?.questionsBasic)
-              ? mod.default.questionsBasic.slice()
+              ? mod.default.questionsBasic
               : []
             : Array.isArray(mod?.default?.questionsAdvanced)
-              ? mod.default.questionsAdvanced.slice()
+              ? mod.default.questionsAdvanced
               : []
 
+        activeDeckRef.value = [...Array(source.length).keys()]
         // Перемешать
-        for (let i = source.length - 1; i > 0; i--) {
+        for (let i = activeDeckRef.value.length - 1; i > 0; i--) {
           const j = Math.floor(Math.random() * (i + 1))
-          ;[source[i], source[j]] = [source[j], source[i]]
+          ;[activeDeckRef.value[i], activeDeckRef.value[j]] = [
+            activeDeckRef.value[j],
+            activeDeckRef.value[i],
+          ]
         }
-        activeDeckRef.value = source
       } catch {
-        // Не удалось перезагрузить — оставим пусто и прервём
         activeDeckRef.value = []
       }
     }
 
     if (activeDeckRef.value.length === 0) return null
 
-    // Вытягиваем карту из соответствующей колоды
-    const card = activeDeckRef.value.shift() || null
+    // Вытягиваем индекс из соответствующей колоды
+    const cardIndex = activeDeckRef.value.shift()
+    const card = typeof cardIndex === 'number' ? cardIndex : null
 
-    // Обновляем совместимый snapshot для UI
-    gameState.value.questionCards = activeDeckRef.value.slice()
+    // Обновляем snapshot для UI
+    gameState.value.questionIndices = activeDeckRef.value.slice()
     gameState.value.currentQuestion = card
 
-    // Сначала рассылаем состояние с установленным вопросом в фазе drawing_question
     gameState.value.phase = 'drawing_question'
     gamePhase.value = 'drawing_question'
     broadcastGameState()
 
-    // Перед началом нового голосования очищаем результаты предыдущего раунда,
-    // чтобы старый выбор не учитывался в новом раунде
     resetVotingState()
 
-    // После того как вопрос установлен и разослан в фазе drawing_question,
-    // сразу переходим к голосованию, чтобы шаблон показывал одновременно карточку и голосование.
-    // Карточка вопроса будет отображаться в секции голосования (см. GameField.vue).
-    // На всякий случай синхронизируем режим перед выбором следующей фазы
-    // ВАЖНО: перед началом нового голосования очищаем результаты предыдущего (старые выборы/ставки)
     resetVotingState()
     gameMode.value = currentMode.value
     gameState.value.gameMode = currentMode.value
@@ -619,11 +602,11 @@ export const useGameStore = defineStore('game', () => {
           gamePhase.value = 'game_over'
           gameState.value.phase = 'game_over'
         } else {
-          // Синхронизируем snapshot активной колоды для UI
-          const activeDeckRef = currentMode.value === 'basic' ? basicDeck : advancedDeck
-          gameState.value.questionCards = activeDeckRef.value.slice()
-          gamePhase.value = 'drawing_question'
-          gameState.value.phase = 'drawing_question'
+    // Синхронизируем snapshot активной колоды для UI
+    const activeDeckRef = currentMode.value === 'basic' ? basicDeck : advancedDeck
+    gameState.value.questionIndices = activeDeckRef.value.slice()
+    gamePhase.value = 'drawing_question'
+    gameState.value.phase = 'drawing_question'
         }
 
         // Обновляем карты на руках (если нужно)
@@ -691,11 +674,11 @@ export const useGameStore = defineStore('game', () => {
           gamePhase.value = 'game_over'
           gameState.value.phase = 'game_over'
         } else {
-          // Синхронизируем snapshot активной колоды для UI
-          const activeDeckRef = currentMode.value === 'basic' ? basicDeck : advancedDeck
-          gameState.value.questionCards = activeDeckRef.value.slice()
-          gamePhase.value = 'drawing_question'
-          gameState.value.phase = 'drawing_question'
+    // Синхронизируем snapshot активной колоды для UI
+    const activeDeckRef = currentMode.value === 'basic' ? basicDeck : advancedDeck
+    gameState.value.questionIndices = activeDeckRef.value.slice()
+    gamePhase.value = 'drawing_question'
+    gameState.value.phase = 'drawing_question'
         }
         broadcastGameState()
         return
@@ -705,7 +688,7 @@ export const useGameStore = defineStore('game', () => {
   // Состояние игры
   const gameState = ref<
     GameState & {
-      currentQuestion?: string | null
+      currentQuestion?: number | null
       votes?: Record<string, string[]>
       bets?: Record<string, string>
       stateVersion?: number
@@ -718,7 +701,6 @@ export const useGameStore = defineStore('game', () => {
     maxPlayers: 8,
     hostId: '',
     createdAt: 0,
-    questionCards: [],
     votingCards: {},
     bettingCards: {},
     currentTurn: 0,
@@ -1048,7 +1030,6 @@ export const useGameStore = defineStore('game', () => {
           maxPlayers: 8,
           hostId: restoredPeerId,
           createdAt: now,
-          questionCards: [],
           votingCards: {},
           bettingCards: {},
           currentTurn: 0,
@@ -4958,7 +4939,6 @@ export const useGameStore = defineStore('game', () => {
       maxPlayers: 8,
       hostId: '',
       createdAt: 0,
-      questionCards: [],
       votingCards: {},
       bettingCards: {},
       currentTurn: 0,
