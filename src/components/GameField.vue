@@ -983,6 +983,8 @@ watch(
   background: #f8f9fa;
   border-radius: 12px;
   border: 1px solid #eef1f4;
+  max-width: 100%;
+  overflow-x: auto;
 }
 
 .players-count {
@@ -1049,6 +1051,8 @@ watch(
   border: 1px dashed #cbd5e1;
   border-radius: 10px;
   padding: 8px;
+  max-width: 100%;
+  overflow-x: auto;
 }
 
 .debug-actions {
@@ -1126,6 +1130,7 @@ watch(
   border-radius: 8px;
   padding: 8px;
   font-size: 12px;
+  max-width: 100%;
 }
 
 .instruction {
@@ -1805,6 +1810,9 @@ watch(
   border: 1px solid #e6ecf5;
   border-radius: 14px;
   padding: 12px;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
 }
 
 .results-block h2 {
@@ -2279,6 +2287,10 @@ watch(
 }
 
 /* Стили "Текущие очки" — унификация под таблицу результатов */
+.score-table {
+  width: 100%;
+  min-width: 0;
+}
 .score-table .results-table {
   width: 100%;
 }
@@ -2402,7 +2414,7 @@ watch(
 
 .bottom-section {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 16px;
   align-items: start;
 }
@@ -2414,15 +2426,17 @@ watch(
     gap: 12px;
   }
 
-  .game-info {
-    padding: 12px 14px;
-    font-size: 0.95rem;
-  }
-
-  .players-count {
-    font-size: 1rem;
-    margin-bottom: 6px;
-  }
+.game-info {
+  text-align: center;
+  padding: 16px 18px;
+  background: #f8f9fa;
+  border-radius: 12px;
+  border: 1px solid #eef1f4;
+  max-width: 100%;
+  width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+}
 
   .status-info {
     gap: 6px;

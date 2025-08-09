@@ -967,6 +967,11 @@ export const useGameStore = defineStore('game', () => {
 
   // Создание комнаты (хост)
   const createRoom = async (nickname: string) => {
+    // --- Очищаем localStorage кроме nickname ---
+    const savedNick = getNickname();
+    localStorage.clear();
+    if (savedNick) localStorage.setItem('nickname', savedNick);
+
     const ridGuard = startRequest('createRoom')
     try {
       connectionStatus.value = 'connecting'
@@ -1098,6 +1103,11 @@ export const useGameStore = defineStore('game', () => {
 
   // Подключение к комнате (клиент)
   const joinRoom = async (nickname: string, targetHostId: string) => {
+    // --- Очищаем localStorage кроме nickname ---
+    const savedNick = getNickname();
+    localStorage.clear();
+    if (savedNick) localStorage.setItem('nickname', savedNick);
+
     const ridGuard = startRequest('joinRoom')
     try {
       connectionStatus.value = 'connecting'
