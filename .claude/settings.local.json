@@ -2,13 +2,17 @@
   "permissions": {
     "allow": [
       "Bash(npm run test:e2e:*)",
+      "Bash(bun run test:e2e:*)",
       "Bash(npm run lint)",
+      "Bash(bun run lint)",
       "Bash(npm run build:*)",
+      "Bash(bun run build:*)",
       "Bash(cp:*)",
       "Bash(npm run type-check:*)",
-      "Bash(playwright test:*)",
-      "Bash(grep:*)",
-      "Bash(npx playwright test:*)"
+      "Bash(bun run type-check:*)",
+      "mcp__git__git_log",
+      "mcp__git__git_status",
+      "mcp__git__git_diff_unstaged"
     ],
     "deny": []
   }
