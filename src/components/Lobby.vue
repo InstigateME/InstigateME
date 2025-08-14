@@ -128,6 +128,17 @@ import QRCode from 'qrcode'
 const router = useRouter()
 const gameStore = useGameStore()
 
+// Debug watcher для isHost изменений
+watch(() => gameStore.isHost, (newValue, oldValue) => {
+  console.log('🎛️ LOBBY: isHost changed:', { 
+    old: oldValue, 
+    new: newValue, 
+    myPlayerId: gameStore.myPlayerId,
+    hostId: gameStore.gameState.hostId,
+    timestamp: new Date().toISOString()
+  })
+}, { immediate: true })
+
 const qrCanvas = ref<HTMLCanvasElement>()
 const copiedHostId = ref(false)
 const errorMessage = ref('')
@@ -191,27 +202,34 @@ const startGame = () => {
   }
 }
 
-// Покинуть комнату: мгновенная навигация, сетевые операции — в фоне
-const leaveRoom = () => {
-  // Сразу уходим на главную
-  router.push('/')
-
-  // В фоне уведомляем и закрываем соединение
-  ;(async () => {
-    try {
-      // Хост и клиенты используют разную логику выхода
-      if (gameStore.isHost) {
-        gameStore.leaveRoom()
-      } else {
-        await gameStore.leaveGracefully()
-      }
-    } catch {
-      // Fallback на случай ошибки сети
-      try {
-        gameStore.leaveRoom()
-      } catch {}
+// Покинуть комнату: дожидаемся сетевых операций перед навигацией
+const leaveRoom = async () => {
+  console.log('🚪 LOBBY: Leave room button clicked!')
+  console.log('🚪 LOBBY: isHost:', gameStore.isHost, 'players:', gameStore.gameState.players.length)
+  console.log('🚪 LOBBY: myPlayerId:', gameStore.myPlayerId, 'hostId:', gameStore.hostId)
+  
+  try {
+    // Хост и клиенты используют разную логику выхода
+    if (gameStore.isHost) {
+      console.log('🚪 LOBBY: Host leaving room, waiting for store operation...')
+      await gameStore.leaveRoom()
+    } else {
+      console.log('🚪 LOBBY: Client leaving room...')
+      await gameStore.leaveGracefully()
     }
-  })()
+  } catch (error) {
+    console.log('🚪 LOBBY: Error during leave operation:', error)
+    // Fallback на случай ошибки сети
+    try {
+      await gameStore.leaveRoom()
+    } catch (fallbackError) {
+      console.log('🚪 LOBBY: Fallback error:', fallbackError)
+    }
+  }
+
+  // Переходим на главную только после завершения сетевых операций
+  console.log('🚪 LOBBY: Navigation to main page...')
+  router.push('/')
 }
 
 // Отслеживание начала игры

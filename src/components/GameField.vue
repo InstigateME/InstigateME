@@ -898,8 +898,8 @@ function onForceContinueWithConfirm(e?: Event): void {
   onForceContinue()
 }
 
-const leaveGame = () => {
-  gameStore.leaveRoom()
+const leaveGame = async () => {
+  await gameStore.leaveRoom()
   router.push('/')
 }
 

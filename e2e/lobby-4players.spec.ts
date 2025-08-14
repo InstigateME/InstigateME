@@ -34,7 +34,7 @@ test.describe('Лобби: 4 игрока входят и видят одина�
 
     // 1) Первый игрок (A) на главной вводит имя "Player A" и создаёт комнату
     const host = players.get('p1').page
-    await host.goto('/', { waitUntil: 'domcontentloaded' })
+    await host.goto('/?test', { waitUntil: 'domcontentloaded' }) // Добавляем параметр test для быстрого таймаута
     // Вводим имя
     await host.getByTestId('nickname-input').fill('Player A')
     // Жмём кнопку создания комнаты по data-test атрибуту
@@ -54,7 +54,7 @@ test.describe('Лобби: 4 игрока входят и видят одина�
     await Promise.all(
       ['p2', 'p3', 'p4'].map(async (pid) => {
         const pN = players.get(pid as PlayerId).page
-        await pN.goto('/', { waitUntil: 'domcontentloaded' })
+        await pN.goto('/?test', { waitUntil: 'domcontentloaded' }) // Добавляем параметр test
         await pN.getByTestId('nickname-input').fill(nicknames[pid as PlayerId])
         // Вводим код комнаты в поле по data-test и жмём кнопку подключения по data-test
         const roomInput = pN.getByTestId('join-room-input')
@@ -140,7 +140,7 @@ test.describe('Лобби: 4 игрока входят и видят одина�
     await Promise.all(
       ['p2', 'p3', 'p4'].map(async (pid) => {
         const pN = players.get(pid as PlayerId).page
-        await pN.goto('/', { waitUntil: 'domcontentloaded' })
+        await pN.goto('/?test', { waitUntil: 'domcontentloaded' }) // Добавляем параметр test
         await pN.getByTestId('nickname-input').fill(nicknames[pid as PlayerId])
         const roomInput = pN.getByTestId('join-room-input')
         if (await roomInput.count()) {
@@ -208,7 +208,7 @@ test.describe('Лобби: 4 игрока входят и видят одина�
     }
   })
 
-  test('выход хоста — выбирается новый хост с минимальным client id', async () => {
+  test('выход хоста — игра заканчивается для всех клиентов', async () => {
     // Подписка на события консоли для всех клиентов
     players.each(({ page, id }) => {
       page.on('console', (msg) => {
@@ -240,7 +240,7 @@ test.describe('Лобби: 4 игрока входят и видят одина�
     await Promise.all(
       ['p2', 'p3', 'p4'].map(async (pid) => {
         const pN = players.get(pid as PlayerId).page
-        await pN.goto('/', { waitUntil: 'domcontentloaded' })
+        await pN.goto('/?test', { waitUntil: 'domcontentloaded' }) // Добавляем параметр test
         await pN.getByTestId('nickname-input').fill(nicknames[pid as PlayerId])
         const roomInput = pN.getByTestId('join-room-input')
         if (await roomInput.count()) {
@@ -260,80 +260,95 @@ test.describe('Лобби: 4 игрока входят и видят одина�
       await expect(page.locator('.players-list')).toBeVisible()
     })
 
-    // 2) Хост выходит из лобби
-    const leaveRoomButton = host.getByTestId('leave-room-button')
-    await leaveRoomButton.waitFor({ state: 'visible', timeout: 15000 })
-    await leaveRoomButton.click()
-    await host.getByTestId('create-room-button').waitFor({ state: 'visible', timeout: 10000 })
-
-    // Даем время на обработку сообщений о выходе хоста
-    await new Promise((resolve) => setTimeout(resolve, 200))
-
-    // 3) Проверяем, что новый хост выбран и отображается у оставшихся клиентов
-    // Даем больше времени на миграцию хоста
-    await new Promise((resolve) => setTimeout(resolve, 2000))
-
-    // Логируем списки игроков на всех клиентах после миграции
-    for (const pid of ['p2', 'p3', 'p4']) {
-      const page = players.get(pid as PlayerId).page
-      const names = await page.locator('.players-list .player-name').allInnerTexts()
-      console.log(`[${pid}] Список игроков после миграции:`, names)
-    }
-
-    // Определяем, кто стал новым хостом (у кого есть host-roomid-section)
-    let newHostPage = null
-    for (const pid of ['p2', 'p3', 'p4']) {
-      const page = players.get(pid as PlayerId).page
-      if (await page.locator('[data-testid="host-roomid-section"]').count() > 0) {
-        newHostPage = page
-        console.log(`Новый хост: ${pid}`)
-        break
+    // 2) Определяем кто на самом деле является хостом
+    console.log('=== Определяем текущего хоста ===')
+    
+    let actualHostPage: Page | null = null
+    let actualHostId: PlayerId | null = null
+    const remainingPlayerIds: PlayerId[] = []
+    
+    for (const { page, id } of players.clients) {
+      const pid = id as PlayerId
+      
+      try {
+        // Проверяем есть ли у этого игрока элемент, который есть только у хоста
+        const hostIndicator = await page.locator('.room-id').count()
+        if (hostIndicator > 0) {
+          console.log(`✅ Игрок ${pid} является хостом`)
+          actualHostPage = page
+          actualHostId = pid
+        } else {
+          console.log(`👤 Игрок ${pid} является клиентом`)
+          remainingPlayerIds.push(pid)
+        }
+      } catch (error) {
+        console.log(`❌ Ошибка при проверке игрока ${pid}:`, error)
+        remainingPlayerIds.push(pid) // Считаем клиентом при ошибке
       }
     }
-    if (!newHostPage) throw new Error('Не удалось определить нового хоста')
-
-    // Проверяем что хотя бы миграция началась - игрок удален из списка
-    console.log('Checking if Player A was removed from lists...')
-
-    // 4) Основная проверка: у всех оставшихся клиентов корректный список игроков (без Player A)
-    const remainingPlayers = [players.get('p2'), players.get('p3'), players.get('p4')]
-
-    await Promise.all(
-      remainingPlayers.map(async ({ page }: { page: Page }) => {
-        await page.getByTestId('players-list').waitFor({ state: 'visible', timeout: 15000 })
-        await expect(page.locator('.players-list')).toBeVisible()
-      }),
-    )
-
-    const lists = await Promise.all(
-      remainingPlayers.map(async ({ page, id }: { page: Page; id: string }) => {
-        const names: string[] = await page.locator('.players-list .player-name').allInnerTexts()
-        const normalized = names
-          .map((n: string) => n.trim())
-          .filter(Boolean)
-          .sort()
-        return { id, names: normalized }
-      }),
-    )
-
-    const expected = ['Player B', 'Player C', 'Player D'].sort()
-    for (const { id, names } of lists) {
-      expect.soft(names, `Неверный список у клиента ${id}`).toEqual(expected)
+    
+    if (!actualHostPage || !actualHostId) {
+      throw new Error('Не удалось определить текущего хоста!')
     }
-    for (let i = 1; i < lists.length; i++) {
-      expect
-        .soft(lists[i].names, `Списки клиентов расходятся: ${lists[0].id} vs ${lists[i].id}`)
-        .toEqual(lists[0].names)
+    
+    console.log(`🎯 Текущий хост: ${actualHostId}, клиенты: [${remainingPlayerIds.join(', ')}]`)
+
+    // 3) Хост выходит из лобби
+    const leaveRoomButton = actualHostPage.getByTestId('leave-room-button')
+    await leaveRoomButton.waitFor({ state: 'visible', timeout: 15000 })
+    console.log(`🚪 Хост ${actualHostId} нажимает кнопку выхода`)
+    await leaveRoomButton.click()
+    await actualHostPage.getByTestId('create-room-button').waitFor({ state: 'visible', timeout: 10000 })
+
+    // 4) Проверяем что все клиенты сразу вернулись на главную страницу 
+    // (игра должна закончиться мгновенно из-за добровольного выхода хоста)
+    
+    console.log('Проверяем что все клиенты мгновенно перешли на главную страницу...')
+    
+    // Ждем максимум 5 секунд - должно произойти быстро при получении host_left_room сообщения
+    for (let attempt = 0; attempt < 10; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 500))
+
+      let allReturnedHome = true
+      for (const pid of remainingPlayerIds) {
+        const page = players.get(pid).page
+        // Проверяем что на странице есть кнопка создания комнаты (главная страница)
+        const createRoomButton = page.getByTestId('create-room-button')
+        if (await createRoomButton.count() === 0) {
+          allReturnedHome = false
+          console.log(`Клиент ${pid} ещё не на главной странице`)
+          break
+        }
+      }
+
+      if (allReturnedHome) {
+        console.log('✅ Все клиенты мгновенно вернулись на главную страницу')
+        break
+      }
+
+      console.log(`Попытка ${attempt + 1}/10: ждем возврата всех клиентов на главную...`)
     }
 
-    // Проверяем room-info у нового хоста
-    const roomInfo = newHostPage.getByTestId('host-roomid-section')
-    await expect(roomInfo).toBeVisible()
-    const displayedHostId = newHostPage.getByTestId('host-id')
-    await expect
-      .soft(displayedHostId, 'host-id в room-info не совпадает с ожидаемым')
-      .toHaveText(hostId)
+    // 4) Финальная проверка: убеждаемся что все клиенты на главной странице
+    console.log('=== Финальная проверка: все клиенты на главной странице ===')
+    
+    for (const pid of remainingPlayerIds) {
+      const page = players.get(pid).page
+      
+      // Проверяем наличие кнопки создания комнаты (главная страница)
+      await expect(page.getByTestId('create-room-button')).toBeVisible({ timeout: 5000 })
+      
+      // Проверяем наличие поля ввода никнейма (главная страница)  
+      await expect(page.getByTestId('nickname-input')).toBeVisible({ timeout: 5000 })
+      
+      // Проверяем что НЕТ списка игроков (значит не в лобби)
+      expect(await page.locator('[data-testid="players-list"]').count()).toBe(0)
+      
+      console.log(`✅ Клиент ${pid} вернулся на главную страницу`)
+    }
 
-    await host.pause()
+    console.log('✅ Тест завершен успешно: все клиенты вернулись на главную страницу после выхода хоста')
+    
+    // await host.pause() // Раскомментировать для отладки
   })
 })

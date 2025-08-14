@@ -40,6 +40,9 @@ class PeerService {
   private currentRoomId: string | null = null
   private lastHeartbeatReceived: number = 0
 
+  // Локальное сохранение ID текущего хоста для определения миграции
+  private currentHostId: string | null = null
+
   // Callback для обнаружения отключения хоста
   private onHostDisconnectedCallback: (() => void) | null = null
 
@@ -142,32 +145,61 @@ class PeerService {
   // Подключение клиента к хосту
   async connectToHost(hostId: string): Promise<void> {
     return new Promise((resolve, reject) => {
-      this.peer = new Peer()
+      // Сохраняем текущий peer ID если он есть, чтобы переиспользовать при переподключении
+      const currentPeerId = this.peer?.id
 
-      this.peer.on('open', () => {
-        const conn = this.peer!.connect(hostId)
-
+      // Если у нас есть активный peer, пытаемся переиспользовать его
+      if (this.peer && this.peer.open && currentPeerId) {
+        console.log('🔄 Reusing existing peer ID for reconnection:', currentPeerId)
+        
+        const conn = this.peer.connect(hostId)
         conn.on('open', () => {
-          console.log('Connected to host:', hostId)
+          console.log('Connected to host:', hostId, 'with existing peer ID:', currentPeerId)
           this.connections.set(hostId, conn)
           this.setupConnectionHandlers(conn)
           resolve()
         })
 
         conn.on('error', (error) => {
-          console.error('Connection error:', error)
-          reject(error)
+          console.error('Connection error with existing peer:', error)
+          // Fallback to creating new peer
+          this.createNewPeerAndConnect(hostId, resolve, reject)
         })
+      } else {
+        // Создаем новый peer только если нет активного
+        this.createNewPeerAndConnect(hostId, resolve, reject)
+      }
+    })
+  }
+
+  private createNewPeerAndConnect(hostId: string, resolve: () => void, reject: (error: any) => void) {
+    console.log('🆕 Creating new peer for host connection')
+    this.peer = new Peer()
+
+    this.peer.on('open', (newPeerId) => {
+      console.log('New peer created with ID:', newPeerId)
+      const conn = this.peer!.connect(hostId)
+
+      conn.on('open', () => {
+        console.log('Connected to host:', hostId, 'with new peer ID:', newPeerId)
+        this.connections.set(hostId, conn)
+        this.setupConnectionHandlers(conn)
+        resolve()
       })
 
-      this.peer.on('error', (error) => {
-        if (this.isShuttingDown) {
-          console.log('Peer error suppressed during shutdown:', (error as any)?.type || error)
-          return
-        }
-        console.error('Peer error:', error)
+      conn.on('error', (error) => {
+        console.error('Connection error:', error)
         reject(error)
       })
+    })
+
+    this.peer.on('error', (error) => {
+      if (this.isShuttingDown) {
+        console.log('Peer error suppressed during shutdown:', (error as any)?.type || error)
+        return
+      }
+      console.error('Peer error:', error)
+      reject(error)
     })
   }
 
@@ -231,7 +263,11 @@ class PeerService {
 
       // Простая дедупликация по ключу
       try {
-        const key = `${message.type}:${message.meta?.roomId || ''}:${(message as any)?.payload?.userId || (message as any)?.payload?.requesterId || ''}:${message.meta?.ts || (message as any)?.payload?.timestamp || ''}`
+        // Для betting сообщений используем playerId, для остальных - userId/requesterId
+        const userIdentifier = (message as any)?.payload?.playerId || 
+                              (message as any)?.payload?.userId || 
+                              (message as any)?.payload?.requesterId || ''
+        const key = `${message.type}:${message.meta?.roomId || ''}:${userIdentifier}:${message.meta?.ts || (message as any)?.payload?.timestamp || ''}`
         if (this.processedMessages.has(key)) {
           console.log('🧯 Duplicate message ignored:', key)
           return
@@ -270,6 +306,34 @@ class PeerService {
           this.onClientDisconnectedCallback(peerId)
         } catch (e) {
           console.warn('onClientDisconnected callback failed:', e)
+        }
+      }
+
+      // Если мы клиент и потеряли соединение с хостом — немедленно начинаем миграцию
+      if (!this.isHostRole && peerId && this.onHostDisconnectedCallback) {
+        // Проверяем, является ли отключенный peer нашим хостом
+        console.log('🔍 CLIENT connection closed - checking if this was host:', {
+          closedPeerId: peerId,
+          localCurrentHostId: this.currentHostId,
+          isHost: peerId === this.currentHostId
+        })
+        
+        if (peerId === this.currentHostId) {
+          console.log('🚨 HOST CONNECTION CLOSED - triggering immediate host migration')
+          console.log('🚨 Migration trigger details:', {
+            disconnectedPeer: peerId,
+            detectedHostId: this.currentHostId,
+            callbackExists: !!this.onHostDisconnectedCallback
+          })
+          try {
+            this.onHostDisconnectedCallback()
+          } catch (error) {
+            console.error('❌ Error calling host disconnected callback:', error)
+          }
+        } else if (this.currentHostId) {
+          console.log('🔍 Closed connection was not the host, no migration needed')
+        } else {
+          console.warn('⚠️ Could not determine current host ID - cannot verify if migration needed')
         }
       }
     })
@@ -423,7 +487,13 @@ class PeerService {
 
   // Установка роли хоста и запуск heartbeat
   setAsHost(hostId: string, roomId?: string) {
+    console.log('🏠 PeerService: Setting as host, clearing any existing heartbeat timers')
+    // Clear any existing heartbeat timers from previous host to prevent cascading migrations
+    this.heartbeatTimers.forEach((t) => clearTimeout(t))
+    this.heartbeatTimers.clear()
+    
     this.isHostRole = true
+    this.currentHostId = hostId // Сохраняем локально для быстрого доступа
     if (roomId) {
       this.currentRoomId = roomId
       // Гарантируем, что сохраняем стабильный hostId для комнаты
@@ -444,6 +514,17 @@ class PeerService {
     // Сбрасываем маркер последнего heartbeat, чтобы избежать ложного таймаута от предыдущего хоста
     this.lastHeartbeatReceived = Date.now()
     this.startHeartbeatMonitoring()
+  }
+
+  // Установка текущего хоста (для клиентов)
+  setCurrentHostId(hostId: string) {
+    this.currentHostId = hostId
+    console.log('🆔 PeerService: Updated current host ID to:', hostId)
+  }
+
+  // Получение текущего хоста
+  getCurrentHostId(): string | null {
+    return this.currentHostId
   }
 
   // Запуск мониторинга heartbeat (для клиентов)
@@ -497,28 +578,53 @@ class PeerService {
 
   // Обработка полученного heartbeat (для клиентов)
   handleHeartbeat(hostId: string) {
+    console.log('💓 HEARTBEAT received from host:', hostId, 'at', new Date().toISOString())
     this.lastHeartbeatReceived = Date.now()
 
     // Сброс таймера отключения хоста
     if (this.heartbeatTimers.has(hostId)) {
       clearTimeout(this.heartbeatTimers.get(hostId)!)
+      console.log('♻️ Reset existing heartbeat timeout timer for host:', hostId)
     }
 
     // Установка нового таймера
     const timer = window.setTimeout(() => {
-      console.log('Host heartbeat timeout detected for:', hostId)
+      console.log('💀 HOST HEARTBEAT TIMEOUT DETECTED for:', hostId, 'after', HEARTBEAT_TIMEOUT, 'ms')
+      console.log('🔍 Time since last heartbeat:', Date.now() - this.lastHeartbeatReceived, 'ms')
+      console.log('🚩 isShuttingDown flag:', this.isShuttingDown)
+      console.log('🔍 My role - isHost:', this.isHostRole, 'myId:', this.getMyId())
+      
+      // Only suppress if we're the one shutting down (host leaving)
+      // Clients should still detect host disconnection even if their own service isn't shutting down
+      if (this.isShuttingDown && this.isHostRole) {
+        console.log('⏹️ Heartbeat timeout suppressed - Host is shutting down')
+        return
+      }
+      
       this.handleHostDisconnection(hostId)
     }, HEARTBEAT_TIMEOUT)
 
     this.heartbeatTimers.set(hostId, timer)
+    console.log('⏰ Set new heartbeat timeout timer for host:', hostId, 'timeout:', HEARTBEAT_TIMEOUT, 'ms')
   }
 
   // Обработка отключения хоста
   private handleHostDisconnection(hostId: string) {
-    console.log('Host disconnected:', hostId)
+    console.log('🚨 HOST DISCONNECTION DETECTED:', hostId)
+    console.log('🔍 Disconnection context:', {
+      myId: this.getMyId(),
+      isHost: this.isHostRole,
+      isClient: this.isClient(),
+      connectionsCount: this.connections.size,
+      connectionIds: Array.from(this.connections.keys()),
+      heartbeatTimersCount: this.heartbeatTimers.size,
+      lastHeartbeatTime: new Date(this.lastHeartbeatReceived).toISOString(),
+      timeSinceLastHeartbeat: Date.now() - this.lastHeartbeatReceived
+    })
 
     // Удаляем соединение с отключенным хостом
     this.connections.delete(hostId)
+    console.log('🗑️ Removed connection to disconnected host:', hostId)
 
     // Попытка мягкого переподключения к ТОМУ ЖЕ хосту в пределах grace period клиента
     // Если у клиента есть Peer и он открыт — пробуем восстановить соединение к тому же hostId.
@@ -565,13 +671,24 @@ class PeerService {
 
   // Переподключение к новому хосту
   async reconnectToNewHost(newHostId: string): Promise<void> {
-    console.log('Reconnecting to new host:', newHostId)
+    console.log('🔄 Reconnecting to new host:', newHostId)
+    console.log('🔄 Current peer ID:', this.peer?.id)
 
-    // Очистка старых соединений
-    this.connections.clear()
+    // Останавливаем heartbeat, но пока НЕ очищаем соединения полностью
     this.stopHeartbeat()
+    
+    // Закрываем только соединения со старым хостом, но сохраняем peer объект
+    const oldConnections = Array.from(this.connections.keys())
+    console.log('🧹 Closing old host connections:', oldConnections)
+    
+    this.connections.forEach((conn, peerId) => {
+      if (conn.open) {
+        conn.close()
+      }
+    })
+    this.connections.clear()
 
-    // Подключение к новому хосту
+    // Подключение к новому хосту с сохранением peer ID
     return this.connectToHost(newHostId)
   }
 
@@ -1163,10 +1280,24 @@ class PeerService {
 
   // Закрытие всех соединений
   disconnect() {
+    console.log('🔥 DISCONNECT called - shutting down PeerService')
+    console.log('🔍 Disconnect context:', {
+      myId: this.getMyId(),
+      isHost: this.isHostRole,
+      isClient: this.isClient(),
+      connectionsCount: this.connections.size,
+      connectionIds: Array.from(this.connections.keys()),
+      heartbeatInterval: !!this.heartbeatInterval,
+      heartbeatTimersCount: this.heartbeatTimers.size
+    })
+    
     // Помечаем начало мягкого завершения, чтобы подавлять ошибки/автореконнекты
     this.isShuttingDown = true
+    console.log('🚩 Set isShuttingDown flag to true')
 
+    console.log('⏹️ Stopping heartbeat...')
     this.stopHeartbeat()
+    console.log('🚫 Cancelling host recovery grace period...')
     this.cancelHostRecoveryGracePeriod()
 
     // Закрываем все data-каналы
@@ -1211,9 +1342,15 @@ class PeerService {
     this.pendingConnections.clear()
     this.isConnectingToPeer.clear()
 
+    // ВАЖНО: НЕ сбрасываем currentHostId здесь - это нужно для корректной обработки 
+    // закрытия соединений в setupConnectionHandlers
+    // this.currentHostId будет сброшен позже после обработки всех закрытий соединений
+
     // Сбрасываем флаг после полного завершения в конце таска
     setTimeout(() => {
       this.isShuttingDown = false
+      // Сбрасываем currentHostId только после завершения всех операций
+      this.currentHostId = null
     }, 0)
   }
 }

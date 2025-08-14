@@ -171,6 +171,7 @@ export type UserJoinedBroadcastMessage = BaseMessage<
   UserJoinedBroadcastPayload
 >
 export type UserLeftBroadcastMessage = BaseMessage<'user_left_broadcast', UserLeftBroadcastPayload>
+export type HostLeftRoomMessage = BaseMessage<'host_left_room', HostLeftRoomPayload>
 
 // Миграция хоста
 export type MigrationProposalMessage = BaseMessage<'migration_proposal', MigrationProposalPayload>
@@ -229,6 +230,8 @@ export type PlayerIdUpdatedMessage = BaseMessage<
   { oldId: string; newId: string; message?: string }
 >
 
+// Удален - mesh networking больше не используется
+
 // Игровые сообщения (Провокатор)
 export type DrawQuestionRequestMessage = BaseMessage<
   'draw_question_request',
@@ -282,6 +285,7 @@ export type PeerMessage =
   | UserLeftRoomMessage
   | UserJoinedBroadcastMessage
   | UserLeftBroadcastMessage
+  | HostLeftRoomMessage
   // Versioned sync protocol (backward-compatible)
   | JoinOkMessage
   | StateSnapshotMessage
@@ -462,6 +466,8 @@ export const HOST_RECOVERY_ATTEMPTS = 3 // Количество попыток �
 export const HOST_RECOVERY_INTERVAL = 2000 // Интервал между попытками восстановления
 export const MESH_RESTORATION_DELAY = 1000 // Задержка восстановления mesh-соединений
 
+// Больше не используется - нет миграции хоста
+
 // Тайминги присутствия
 export const PRESENCE_REJOIN_GRACE = 4000 // 4 секунды на быстрое переподключение без метки "Отсутствует"
 
@@ -490,6 +496,11 @@ export interface UserLeftBroadcastPayload {
   roomId: string
   timestamp: number
   reason: 'explicit_leave' | 'presence_timeout' | 'connection_closed'
+}
+
+export interface HostLeftRoomPayload {
+  hostId: string
+  reason: 'voluntary_leave' | 'force_disconnect'
 }
 
 export interface SubmitVotePayload {
