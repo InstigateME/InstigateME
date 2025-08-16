@@ -367,8 +367,7 @@ type PersistedCompat =
   {
     (): (ctx: PiniaPluginContext) => void
     (opts: PersistOptions): (ctx: PiniaPluginContext) => void
-  } & // Прямой вызов как плагина
-  {
+  } & { // Прямой вызов как плагина
     (ctx: PiniaPluginContext): void
     (opts: PersistOptions, ctx: PiniaPluginContext): void
   }

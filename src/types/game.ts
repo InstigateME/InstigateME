@@ -302,14 +302,9 @@ export interface HeartbeatPayload {
   hostId: string
 }
 
-
 export interface GameStateRequestPayload {
   requesterId: string
 }
-
-
-
-
 
 export interface HostDiscoveryRequestPayload {
   requesterId: string

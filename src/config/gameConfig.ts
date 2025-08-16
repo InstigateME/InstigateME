@@ -6,16 +6,16 @@
 export const GAME_CONFIG = {
   // Максимальное количество игроков в комнате
   MAX_PLAYERS: 50,
-  
+
   // Минимальное количество игроков для старта игры
   MIN_PLAYERS: 3,
-  
+
   // Общее количество раундов в игре
   TOTAL_ROUNDS: 16,
-  
+
   // Таймауты и интервалы (в миллисекундах)
   HEARTBEAT_INTERVAL: 2000, // 2 секунды
-  HEARTBEAT_TIMEOUT: 5000,  // 5 секунд
+  HEARTBEAT_TIMEOUT: 5000, // 5 секунд
   RECONNECTION_TIMEOUT: 10000, // 10 секунд для переподключения
   HOST_DISCOVERY_TIMEOUT: 3000, // 3 секунды на опрос хоста
   HOST_GRACE_PERIOD: 8000, // 8 секунд ожидания восстановления хоста

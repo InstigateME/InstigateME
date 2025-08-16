@@ -98,7 +98,9 @@
         </div>
         <div class="voting-header">
           <h2>{{ phase === 'voting' ? 'Голосование' : 'Тайное голосование' }}</h2>
-          <span class="vote-hint">Нажимайте на игроков для голосования. Кнопка "−" для убавления</span>
+          <span class="vote-hint"
+            >Нажимайте на игроков для голосования. Кнопка "−" для убавления</span
+          >
         </div>
 
         <div class="players-list players-list--voting" data-testid="players-list-voting">
@@ -106,9 +108,18 @@
             v-for="p in otherPlayers"
             :key="p.id"
             class="vote-item"
-            :class="{ 'vote-item--clickable': !alreadyVoted && !(getVoteCount(p.id) >= 2 && totalVotes >= 2) }"
+            :class="{
+              'vote-item--clickable':
+                !alreadyVoted && !(getVoteCount(p.id) >= 2 && totalVotes >= 2),
+            }"
             @click="onVoteItemClick(p.id)"
-            :title="alreadyVoted ? 'Голос уже отправлен' : (getVoteCount(p.id) >= 2 || totalVotes >= 2) ? 'Достигнут лимит голосов' : 'Нажмите чтобы добавить голос за ' + p.nickname"
+            :title="
+              alreadyVoted
+                ? 'Голос уже отправлен'
+                : getVoteCount(p.id) >= 2 || totalVotes >= 2
+                  ? 'Достигнут лимит голосов'
+                  : 'Нажмите чтобы добавить голос за ' + p.nickname
+            "
           >
             <div class="vote-item__info">
               <span class="vote-item__name">{{ p.nickname }}</span>
@@ -431,7 +442,9 @@
             </tbody>
           </table>
         </div>
-        <button class="next-round-btn" @click="onFinishRound" data-testid="next-round-btn">Следующий раунд</button>
+        <button class="next-round-btn" @click="onFinishRound" data-testid="next-round-btn">
+          Следующий раунд
+        </button>
       </div>
 
       <!-- Конец игры -->
@@ -778,7 +791,7 @@ const getVoteCount = (playerId: string) => {
   // Если голос уже отправлен, показываем фактические голоса из состояния игры
   if (alreadyVoted.value) {
     const myVotes = votes.value[myId.value] || []
-    return myVotes.filter(vote => vote === playerId).length
+    return myVotes.filter((vote) => vote === playerId).length
   }
   // Иначе показываем локальные выбранные голоса
   return selectedVotes.value[playerId] || 0
@@ -832,7 +845,7 @@ const onAddVote = (playerId: string) => {
   if (playerId === myId.value) return
   if (getVoteCount(playerId) >= 2) return
   if (totalVotes.value >= 2) return
-  
+
   selectedVotes.value[playerId] = (selectedVotes.value[playerId] || 0) + 1
 }
 
@@ -840,7 +853,7 @@ const onRemoveVote = (playerId: string) => {
   if (alreadyVoted.value) return
   if (playerId === myId.value) return
   if (getVoteCount(playerId) === 0) return
-  
+
   selectedVotes.value[playerId] = (selectedVotes.value[playerId] || 0) - 1
   if (selectedVotes.value[playerId] === 0) {
     delete selectedVotes.value[playerId]
@@ -2420,6 +2433,7 @@ watch(
   width: 100%;
   min-width: 0;
 }
+
 .score-table .results-table {
   width: 100%;
 }
@@ -2555,17 +2569,17 @@ watch(
     gap: 12px;
   }
 
-.game-info {
-  text-align: center;
-  padding: 16px 18px;
-  background: #f8f9fa;
-  border-radius: 12px;
-  border: 1px solid #eef1f4;
-  max-width: 100%;
-  width: 100%;
-  min-width: 0;
-  overflow-x: auto;
-}
+  .game-info {
+    text-align: center;
+    padding: 16px 18px;
+    background: #f8f9fa;
+    border-radius: 12px;
+    border: 1px solid #eef1f4;
+    max-width: 100%;
+    width: 100%;
+    min-width: 0;
+    overflow-x: auto;
+  }
 
   .status-info {
     gap: 6px;

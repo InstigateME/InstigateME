@@ -3,11 +3,19 @@
     <div class="container" :aria-busy="gameStore.uiConnecting">
       <div class="header">
         <h1 class="title">Комната</h1>
-        <button class="leave-btn" @click="leaveRoom" data-testid="leave-room-button">Покинуть комнату</button>
+        <button class="leave-btn" @click="leaveRoom" data-testid="leave-room-button">
+          Покинуть комнату
+        </button>
       </div>
 
       <!-- Баннер восстановления/переподключения -->
-      <div v-if="gameStore.uiConnecting" class="reconnect-banner" role="status" aria-live="polite" data-testid="reconnect-banner">
+      <div
+        v-if="gameStore.uiConnecting"
+        class="reconnect-banner"
+        role="status"
+        aria-live="polite"
+        data-testid="reconnect-banner"
+      >
         <span class="dot" aria-hidden="true"></span>
         Восстановление соединения...
       </div>
@@ -52,7 +60,11 @@
             </div>
           </div>
 
-          <div class="start-section" v-if="gameStore.connectionStatus === 'connected'" data-testid="start-section">
+          <div
+            class="start-section"
+            v-if="gameStore.connectionStatus === 'connected'"
+            data-testid="start-section"
+          >
             <button
               class="btn btn-primary btn-large"
               @click="startGame"
@@ -71,7 +83,11 @@
 
       <!-- Клиент секция -->
       <div v-else class="client-section">
-        <div class="waiting-message" :aria-busy="gameStore.uiConnecting" data-testid="waiting-message">
+        <div
+          class="waiting-message"
+          :aria-busy="gameStore.uiConnecting"
+          data-testid="waiting-message"
+        >
           <h3>Ожидание начала игры...</h3>
           <p>Хост начнет игру, когда будет готов</p>
         </div>
@@ -129,15 +145,19 @@ const router = useRouter()
 const gameStore = useGameStore()
 
 // Debug watcher для isHost изменений
-watch(() => gameStore.isHost, (newValue, oldValue) => {
-  console.log('🎛️ LOBBY: isHost changed:', { 
-    old: oldValue, 
-    new: newValue, 
-    myPlayerId: gameStore.myPlayerId,
-    hostId: gameStore.gameState.hostId,
-    timestamp: new Date().toISOString()
-  })
-}, { immediate: true })
+watch(
+  () => gameStore.isHost,
+  (newValue, oldValue) => {
+    console.log('🎛️ LOBBY: isHost changed:', {
+      old: oldValue,
+      new: newValue,
+      myPlayerId: gameStore.myPlayerId,
+      hostId: gameStore.gameState.hostId,
+      timestamp: new Date().toISOString(),
+    })
+  },
+  { immediate: true },
+)
 
 const qrCanvas = ref<HTMLCanvasElement>()
 const copiedHostId = ref(false)
@@ -207,7 +227,7 @@ const leaveRoom = async () => {
   console.log('🚪 LOBBY: Leave room button clicked!')
   console.log('🚪 LOBBY: isHost:', gameStore.isHost, 'players:', gameStore.gameState.players.length)
   console.log('🚪 LOBBY: myPlayerId:', gameStore.myPlayerId, 'hostId:', gameStore.hostId)
-  
+
   try {
     // Хост и клиенты используют разную логику выхода
     if (gameStore.isHost) {
@@ -249,7 +269,7 @@ watch(
     if (isHost && gameStore.connectionStatus === 'connected' && gameStore.gameState.hostId) {
       await generateQRCode()
     }
-  }
+  },
 )
 
 // Отслеживание изменения hostId - регенерация QR кода
@@ -259,7 +279,7 @@ watch(
     if (gameStore.isHost && gameStore.connectionStatus === 'connected' && hostId) {
       await generateQRCode()
     }
-  }
+  },
 )
 
 onMounted(async () => {
