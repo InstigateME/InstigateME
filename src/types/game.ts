@@ -77,7 +77,9 @@ export interface GameState {
   >
 }
 
-export const PROTOCOL_VERSION = 1
+import { PROTOCOL_VERSION as PROTOCOL_VERSION_CONFIG } from '@/config/gameConfig'
+
+export const PROTOCOL_VERSION = PROTOCOL_VERSION_CONFIG
 
 // ===== Versioned sync protocol (backward-compatible) =====
 
@@ -173,18 +175,7 @@ export type UserJoinedBroadcastMessage = BaseMessage<
 export type UserLeftBroadcastMessage = BaseMessage<'user_left_broadcast', UserLeftBroadcastPayload>
 export type HostLeftRoomMessage = BaseMessage<'host_left_room', HostLeftRoomPayload>
 
-// Миграция хоста
-export type MigrationProposalMessage = BaseMessage<'migration_proposal', MigrationProposalPayload>
-export type MigrationVoteMessage = BaseMessage<'migration_vote', MigrationVotePayload>
-export type MigrationConfirmedMessage = BaseMessage<
-  'migration_confirmed',
-  MigrationConfirmedPayload
->
-export type NewHostIdMessage = BaseMessage<'new_host_id', NewHostIdPayload>
-export type HostMigrationStartedMessage = BaseMessage<
-  'host_migration_started',
-  HostMigrationPayload
->
+// Host discovery (simplified - no migration)
 
 // Host discovery
 export type HostDiscoveryRequestMessage = BaseMessage<
@@ -196,9 +187,7 @@ export type HostDiscoveryResponseMessage = BaseMessage<
   HostDiscoveryResponsePayload
 >
 
-// Mesh / Peer list / Direct connect
-export type PeerListRequestMessage = BaseMessage<'request_peer_list', PeerListRequestPayload>
-export type PeerListUpdateMessage = BaseMessage<'peer_list_update', PeerListUpdatePayload>
+// Mesh / Peer list / Direct connect - removed for hub-and-spoke
 export type DirectConnectionRequestMessage = BaseMessage<
   'direct_connection_request',
   DirectConnectionRequestPayload
@@ -254,17 +243,10 @@ export type PeerMessage =
   | LightUpRequestMessage
   | StartGameMessage
   | HeartbeatMessage
-  | HostMigrationStartedMessage
   | RequestGameStateMessage
   | ConnectionErrorMessage
-  | MigrationProposalMessage
-  | MigrationVoteMessage
-  | MigrationConfirmedMessage
-  | NewHostIdMessage
   | HostDiscoveryRequestMessage
   | HostDiscoveryResponseMessage
-  | PeerListRequestMessage
-  | PeerListUpdateMessage
   | DirectConnectionRequestMessage
   | StateSyncMessage
   | NewHostElectionMessage
@@ -320,43 +302,14 @@ export interface HeartbeatPayload {
   hostId: string
 }
 
-export interface HostMigrationPayload {
-  newHostId: string
-  reason: 'host_disconnected' | 'manual_transfer'
-}
 
 export interface GameStateRequestPayload {
   requesterId: string
 }
 
-export interface MigrationProposalPayload {
-  proposedHostId: string
-  proposedHostToken: string
-  reason: 'host_disconnected' | 'manual_transfer'
-  timestamp: number
-}
 
-export interface MigrationVotePayload {
-  voterId: string
-  voterToken: string
-  proposedHostId: string
-  vote: 'approve' | 'reject'
-  timestamp: number
-}
 
-export interface MigrationConfirmedPayload {
-  newHostId: string
-  newHostToken: string
-  confirmedBy: string[]
-  timestamp: number
-}
 
-export interface NewHostIdPayload {
-  oldHostId: string
-  newHostId: string
-  newHostToken: string
-  timestamp: number
-}
 
 export interface HostDiscoveryRequestPayload {
   requesterId: string
@@ -373,18 +326,7 @@ export interface HostDiscoveryResponsePayload {
   timestamp: number
 }
 
-// Peer Discovery Protocol
-export interface PeerListRequestPayload {
-  requesterId: string
-  requesterToken: string
-  timestamp: number
-}
-
-export interface PeerListUpdatePayload {
-  peers: Player[]
-  fromPlayerId: string
-  timestamp: number
-}
+// Peer Discovery Protocol - removed peer list requests for hub-and-spoke architecture
 
 export interface DirectConnectionRequestPayload {
   requesterId: string
@@ -454,22 +396,19 @@ export interface ExtendedSessionData {
   networkVersion: number // версия сети для обнаружения конфликтов
 }
 
-// Константы для таймингов
-export const HEARTBEAT_INTERVAL = 2000 // 2 секунды
-export const HEARTBEAT_TIMEOUT = 5000 // 5 секунд
-export const RECONNECTION_TIMEOUT = 10000 // 10 секунд для переподключения
-export const MIGRATION_TIMEOUT = 15000 // 15 секунд на миграцию
-export const VOTE_TIMEOUT = 5000 // 5 секунд на голосование
-export const HOST_DISCOVERY_TIMEOUT = 3000 // 3 секунды на опрос хоста
-export const HOST_GRACE_PERIOD = 8000 // 8 секунд ожидания восстановления хоста
-export const HOST_RECOVERY_ATTEMPTS = 3 // Количество попыток восстановления
-export const HOST_RECOVERY_INTERVAL = 2000 // Интервал между попытками восстановления
-export const MESH_RESTORATION_DELAY = 1000 // Задержка восстановления mesh-соединений
+// Импортируем константы из конфигурации
+import { GAME_CONFIG } from '@/config/gameConfig'
 
-// Больше не используется - нет миграции хоста
-
-// Тайминги присутствия
-export const PRESENCE_REJOIN_GRACE = 4000 // 4 секунды на быстрое переподключение без метки "Отсутствует"
+// Экспортируем константы для обратной совместимости
+export const HEARTBEAT_INTERVAL = GAME_CONFIG.HEARTBEAT_INTERVAL
+export const HEARTBEAT_TIMEOUT = GAME_CONFIG.HEARTBEAT_TIMEOUT
+export const RECONNECTION_TIMEOUT = GAME_CONFIG.RECONNECTION_TIMEOUT
+export const HOST_DISCOVERY_TIMEOUT = GAME_CONFIG.HOST_DISCOVERY_TIMEOUT
+export const HOST_GRACE_PERIOD = GAME_CONFIG.HOST_GRACE_PERIOD
+export const HOST_RECOVERY_ATTEMPTS = GAME_CONFIG.HOST_RECOVERY_ATTEMPTS
+export const HOST_RECOVERY_INTERVAL = GAME_CONFIG.HOST_RECOVERY_INTERVAL
+export const MESH_RESTORATION_DELAY = GAME_CONFIG.MESH_RESTORATION_DELAY
+export const PRESENCE_REJOIN_GRACE = GAME_CONFIG.PRESENCE_REJOIN_GRACE
 
 // Полезные типы полезной нагрузки для игровых сообщений
 export interface DrawQuestionRequestPayload {

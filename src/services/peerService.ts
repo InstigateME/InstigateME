@@ -319,8 +319,8 @@ class PeerService {
         })
         
         if (peerId === this.currentHostId) {
-          console.log('🚨 HOST CONNECTION CLOSED - triggering immediate host migration')
-          console.log('🚨 Migration trigger details:', {
+          console.log('🚨 HOST CONNECTION CLOSED - notifying game store')
+          console.log('🚨 Host disconnection details:', {
             disconnectedPeer: peerId,
             detectedHostId: this.currentHostId,
             callbackExists: !!this.onHostDisconnectedCallback
@@ -331,9 +331,9 @@ class PeerService {
             console.error('❌ Error calling host disconnected callback:', error)
           }
         } else if (this.currentHostId) {
-          console.log('🔍 Closed connection was not the host, no migration needed')
+          console.log('🔍 Closed connection was not the host, no action needed')
         } else {
-          console.warn('⚠️ Could not determine current host ID - cannot verify if migration needed')
+          console.warn('⚠️ Could not determine current host ID - cannot verify if host disconnected')
         }
       }
     })
@@ -488,7 +488,7 @@ class PeerService {
   // Установка роли хоста и запуск heartbeat
   setAsHost(hostId: string, roomId?: string) {
     console.log('🏠 PeerService: Setting as host, clearing any existing heartbeat timers')
-    // Clear any existing heartbeat timers from previous host to prevent cascading migrations
+    // Clear any existing heartbeat timers from previous host connections
     this.heartbeatTimers.forEach((t) => clearTimeout(t))
     this.heartbeatTimers.clear()
     
@@ -913,7 +913,7 @@ class PeerService {
 
     // Запускаем таймер grace period
     this.hostRecoveryState.gracePeriodTimer = window.setTimeout(() => {
-      console.log('⏰ Host recovery grace period ended, starting migration')
+      console.log('⏰ Host recovery grace period ended, starting reconnection')
       this.endHostRecoveryGracePeriod()
     }, HOST_GRACE_PERIOD)
 
@@ -1054,7 +1054,7 @@ class PeerService {
       heartbeatTimersCount: this.heartbeatTimers.size,
     })
 
-    console.log('📢 Host recovery successful - cancelling migration and restoring connection')
+    console.log('📢 Host recovery successful - connection restored')
 
     // Уведомляем gameStore о успешном восстановлении
     if (this.onHostRecoveredCallback) {

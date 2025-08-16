@@ -4,6 +4,7 @@ import { Mutex } from 'async-mutex'
 import { storageSafe } from '@/utils/storageSafe'
 import { isDebugEnabled } from '@/utils/debug'
 import router from '@/router'
+import { GAME_CONFIG, PLAYER_COLORS, NICKNAME_PREFIX, ROOM_ID_WORDS, DEFAULT_CARDS } from '@/config/gameConfig'
 // Импорт удален - больше нет миграции хоста
 import type {
   Player,
@@ -161,8 +162,8 @@ export const useGameStore = defineStore('game', () => {
     | 'game_over'
   >('lobby')
 
-  // Чередование: 16 раундов, нечетные — basic, четные — advanced
-  const TOTAL_ROUNDS = 16
+  // Чередование: количество раундов из конфига, нечетные — basic, четные — advanced
+  const TOTAL_ROUNDS = GAME_CONFIG.TOTAL_ROUNDS
   const currentRound = ref<number>(1)
   const currentMode = computed<'basic' | 'advanced'>(() =>
     currentRound.value % 2 === 1 ? 'basic' : 'advanced',
@@ -172,12 +173,17 @@ export const useGameStore = defineStore('game', () => {
 
   // Следующий раунд: инкрементируем счетчик до 16 и пересчитываем режим
   const advanceRound = () => {
+    const oldRound = currentRound.value
+    const oldMode = gameMode.value
+    
     // Инкремент номера раунда всегда, а проверку конца игры делаем ниже в переходе фаз
     currentRound.value += 1
 
     // Обновляем режим согласно чередованию и синхронизируем в state
     gameMode.value = currentMode.value
     gameState.value.gameMode = currentMode.value
+    
+    console.log(`🔄 ROUND ADVANCE: ${oldRound} (${oldMode}) → ${currentRound.value} (${gameMode.value})`)
   }
 
   // Две независимые колоды индексов вопросов на игру (перетасовываются один раз при старте)
@@ -225,8 +231,8 @@ export const useGameStore = defineStore('game', () => {
     // Инициализация карт и очков
     gameState.value.scores = {}
     gameState.value.players.forEach((player) => {
-      player.votingCards = ['Голос 1', 'Голос 2']
-      player.bettingCards = ['0', '±', '+']
+      player.votingCards = [...DEFAULT_CARDS.voting]
+      player.bettingCards = [...DEFAULT_CARDS.betting]
       gameState.value.scores[player.id] = 0
     })
 
@@ -319,8 +325,8 @@ export const useGameStore = defineStore('game', () => {
     const isLobby = (gameState.value.phase ?? 'lobby') === 'lobby'
     if (!isLobby) return
 
-    // Минимум 2 игрока, чтобы не залипать в ожидании
-    if (gameState.value.players.length < 2) return
+    // Минимум игроков из конфига, чтобы не залипать в ожидании
+    if (gameState.value.players.length < GAME_CONFIG.MIN_PLAYERS) return
 
     // Инициализируем игру и явно дублируем всё в gameState для клиентов
     // Параметр mode больше НЕ фиксирует режим — режим строго задается чередованием по currentRound.
@@ -425,6 +431,9 @@ export const useGameStore = defineStore('game', () => {
     const nextPhase = gameMode.value === 'basic' ? 'voting' : 'secret_voting'
     gamePhase.value = nextPhase
     gameState.value.phase = nextPhase
+    
+    console.log(`🎯 PHASE SET: mode=${gameMode.value} → phase=${nextPhase} (round=${currentRound.value})`)
+    
     broadcastGameState()
 
     return card
@@ -450,7 +459,7 @@ export const useGameStore = defineStore('game', () => {
       broadcastGameState()
       console.log('[MUTEX] submitVote: после broadcastGameState')
 
-      // Автопереход фазы: когда ВСЕ активные игроки проголосовали, двигаем voting -> answering
+      // Автопереход фазы: когда ВСЕ активные игроки проголосовали, двигаем voting -> betting (basic) или secret_voting -> answering (advanced)
       if (((gameMode.value === 'advanced' && gamePhase.value === 'secret_voting') || 
            (gameMode.value === 'basic' && gamePhase.value === 'voting')) && isHost.value) {
         debugSnapshot('before_secret_to_answering_check')
@@ -487,10 +496,18 @@ export const useGameStore = defineStore('game', () => {
             .filter(([_, count]) => count === maxVotes && maxVotes > 0)
             .map(([playerId]) => playerId)
 
-          gameState.value.answeringPlayerId = leaders[0] || null
-          gamePhase.value = 'answering'
-          gameState.value.phase = 'answering'
-          console.log('[MUTEX] submitVote: автопереход фазы -> answering (режим:', gameMode.value, ')')
+          if (gameMode.value === 'advanced') {
+            // В advanced режиме: secret_voting -> answering
+            gameState.value.answeringPlayerId = leaders[0] || null
+            gamePhase.value = 'answering'
+            gameState.value.phase = 'answering'
+            console.log('[MUTEX] submitVote: автопереход фазы secret_voting -> answering')
+          } else {
+            // В basic режиме: voting -> betting
+            gamePhase.value = 'betting'
+            gameState.value.phase = 'betting'
+            console.log('[MUTEX] submitVote: автопереход фазы voting -> betting')
+          }
           broadcastGameState()
         }
       }
@@ -610,8 +627,8 @@ export const useGameStore = defineStore('game', () => {
 
         // Обновляем карты на руках (если нужно)
         gameState.value.players.forEach((player) => {
-          player.votingCards = ['Голос 1', 'Голос 2']
-          player.bettingCards = ['0', '±', '+']
+          player.votingCards = [...DEFAULT_CARDS.voting]
+          player.bettingCards = [...DEFAULT_CARDS.betting]
         })
 
         broadcastGameState()
@@ -697,7 +714,7 @@ export const useGameStore = defineStore('game', () => {
     gameStarted: false,
     players: [],
     litUpPlayerId: null,
-    maxPlayers: 8,
+    maxPlayers: GAME_CONFIG.MAX_PLAYERS,
     hostId: '',
     createdAt: 0,
     votingCards: {},
@@ -842,7 +859,7 @@ export const useGameStore = defineStore('game', () => {
   const canStartGame = computed(() => {
     // Правило: стартовать можно только из лобби и только хосту. Минимум 3 игрока, чтобы не зависать в ожидании.
     const isLobby = (gameState.value.phase ?? 'lobby') === 'lobby'
-    const enoughPlayers = gameState.value.players.length >= 3
+    const enoughPlayers = gameState.value.players.length >= GAME_CONFIG.MIN_PLAYERS
     return isHost.value && isLobby && enoughPlayers
   })
 
@@ -853,38 +870,22 @@ export const useGameStore = defineStore('game', () => {
       gameState.value.players.length < gameState.value.maxPlayers || !gameState.value.gameStarted,
   )
 
-  // Предустановленная палитра из 8 контрастных цветов (WCAG-friendly)
-  const PLAYER_COLORS: string[] = [
-    '#FF6B6B', // Red
-    '#4ECDC4', // Teal
-    '#45B7D1', // Blue
-    '#C7F464', // Lime
-    '#FFA500', // Orange
-    '#AA66CC', // Purple
-    '#FFD93D', // Yellow
-    '#2ECC71', // Green
-  ]
-
   // Определение цвета по индексy присоединения (детерминированно, циклически)
   const getColorByIndex = (index: number): string => {
     return PLAYER_COLORS[index % PLAYER_COLORS.length]
   }
 
   // Генерация никнейма по умолчанию
-  const NICKNAME_PREFIX = 'Player'
-
   const generateDefaultNickname = (): string => {
     return `${NICKNAME_PREFIX}${Math.floor(Math.random() * 9999)}`
   }
 
   // Генерация читаемого ID комнаты
   const generateRoomId = (): string => {
-    const adjectives = ['RED', 'BLUE', 'GREEN', 'GOLD', 'SILVER', 'PURPLE', 'ORANGE', 'PINK']
-    const nouns = ['DRAGON', 'TIGER', 'EAGLE', 'WOLF', 'LION', 'BEAR', 'SHARK', 'PHOENIX']
     const numbers = Math.floor(Math.random() * 100)
 
-    const adjective = adjectives[Math.floor(Math.random() * adjectives.length)]
-    const noun = nouns[Math.floor(Math.random() * nouns.length)]
+    const adjective = ROOM_ID_WORDS.adjectives[Math.floor(Math.random() * ROOM_ID_WORDS.adjectives.length)]
+    const noun = ROOM_ID_WORDS.nouns[Math.floor(Math.random() * ROOM_ID_WORDS.nouns.length)]
 
     return `${adjective}-${noun}-${numbers}`
   }
@@ -1028,7 +1029,7 @@ export const useGameStore = defineStore('game', () => {
           gameStarted: false,
           players: [],
           litUpPlayerId: null,
-          maxPlayers: 8,
+          maxPlayers: GAME_CONFIG.MAX_PLAYERS,
           hostId: restoredPeerId,
           createdAt: now,
           votingCards: {},
@@ -1050,8 +1051,8 @@ export const useGameStore = defineStore('game', () => {
           isHost: true,
           joinedAt: now,
           authToken: generateAuthToken(restoredPeerId, targetRoomId, now),
-          votingCards: ['Голос 1', 'Голос 2'],
-          bettingCards: ['0', '±', '+'],
+          votingCards: [...DEFAULT_CARDS.voting],
+          bettingCards: [...DEFAULT_CARDS.betting],
         }
 
         gameState.value.players = [hostPlayer]
@@ -1149,23 +1150,7 @@ export const useGameStore = defineStore('game', () => {
         ),
       )
 
-      // 6) Запрашиваем peer‑лист для mesh
-      peerService.sendMessage(
-        targetHostId,
-        makeMessage(
-          'request_peer_list',
-          {
-            requesterId: myPlayerId.value,
-            requesterToken: '',
-            timestamp: Date.now(),
-          },
-          {
-            roomId: roomId.value || gameState.value.roomId || '',
-            fromId: myPlayerId.value,
-            ts: Date.now(),
-          },
-        ),
-      )
+      // Note: peer list request removed - no longer needed in hub-and-spoke architecture
 
       // 7) Дожидаемся быстрого обновления состояния (используем уже существующую утилиту)
       try {
@@ -1628,8 +1613,8 @@ export const useGameStore = defineStore('game', () => {
         isHost: false,
         joinedAt: now,
         authToken: generateAuthToken(conn.peer, gameState.value.roomId, now),
-        votingCards: ['Карточка 1', 'Карточка 2'],
-        bettingCards: ['0', '±', '+'],
+        votingCards: [...DEFAULT_CARDS.voting],
+        bettingCards: [...DEFAULT_CARDS.betting],
       }
 
       console.log('Adding new player:', newPlayer)
@@ -3603,8 +3588,8 @@ export const useGameStore = defineStore('game', () => {
               roomId.value || gameState.value.roomId,
               Date.now(),
             ),
-            votingCards: ['Голос 1', 'Голос 2'],
-            bettingCards: ['0', '±', '+'],
+            votingCards: [...DEFAULT_CARDS.voting],
+            bettingCards: [...DEFAULT_CARDS.betting],
           } as any)
         }
 
@@ -3817,27 +3802,7 @@ export const useGameStore = defineStore('game', () => {
         true,
       )
 
-      // КРИТИЧНО: Запрашиваем список peer'ов для mesh-соединений
-      await sendWithRetry(
-        targetHostId,
-        () =>
-          makeMessage(
-            'request_peer_list',
-            {
-              requesterId: myPlayerId.value,
-              requesterToken: '',
-              timestamp: Date.now(),
-            },
-            {
-              roomId: roomId.value || gameState.value.roomId,
-              fromId: myPlayerId.value,
-              ts: Date.now(),
-            },
-          ),
-        2,
-        300,
-        false,
-      )
+      // Note: peer list request removed - no longer needed in hub-and-spoke architecture
 
       // Ждем получения обновленного состояния (быстрая проверка)
       await waitForGameStateUpdate()
@@ -3851,27 +3816,7 @@ export const useGameStore = defineStore('game', () => {
         hostId.value = gameState.value.hostId
       }
 
-      // Быстрый mesh: запросим список пиров ещё раз через короткую задержку
-      setTimeout(() => {
-        try {
-          peerService.sendMessage(
-            targetHostId,
-            makeMessage(
-              'request_peer_list',
-              {
-                requesterId: myPlayerId.value,
-                requesterToken: '',
-                timestamp: Date.now(),
-              },
-              {
-                roomId: roomId.value || gameState.value.roomId,
-                fromId: myPlayerId.value,
-                ts: Date.now(),
-              },
-            ),
-          )
-        } catch {}
-      }, 300)
+      // Note: peer list request in setTimeout removed - no longer needed in hub-and-spoke architecture
 
       console.log('Client restored and reconnected with updated state')
       // После получения state от хоста считаем, что восстановление успешно — отменяем любые локальные процедуры миграции
@@ -4153,7 +4098,7 @@ export const useGameStore = defineStore('game', () => {
       gameStarted: false,
       players: [],
       litUpPlayerId: null,
-      maxPlayers: 8,
+      maxPlayers: GAME_CONFIG.MAX_PLAYERS,
       hostId: '',
       createdAt: 0,
       votingCards: {},
