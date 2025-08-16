@@ -2036,9 +2036,9 @@ export const useGameStore = defineStore('game', () => {
           return
         }
 
-        // Нормализуем массив голосов (макс 2, уникальные и не голосуем за себя)
-        const uniqueVotes = Array.from(new Set(rawVotes)).slice(0, 2)
-        const validVotes = uniqueVotes.filter((id) => id && id !== voterId)
+        // Нормализуем массив голосов (макс 2, не голосуем за себя)
+        const limitedVotes = rawVotes.slice(0, 2)
+        const validVotes = limitedVotes.filter((id) => id && id !== voterId)
 
         if (!gameState.value.votes) gameState.value.votes = {}
         gameState.value.votes[voterId] = validVotes

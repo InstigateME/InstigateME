@@ -444,7 +444,7 @@ export interface HostLeftRoomPayload {
 
 export interface SubmitVotePayload {
   voterId: string
-  targetIds: string[] // длиной до 2
+  targetIds: string[] // до 2 голосов (можно два за одного игрока)
   stateVersion?: number
 }
 

@@ -98,32 +98,51 @@
         </div>
         <div class="voting-header">
           <h2>{{ phase === 'voting' ? 'Голосование' : 'Тайное голосование' }}</h2>
-          <span class="vote-hint">Выберите до двух игроков</span>
+          <span class="vote-hint">Нажимайте на игроков для голосования. Кнопка "−" для убавления</span>
         </div>
 
         <div class="players-list players-list--voting" data-testid="players-list-voting">
-          <button
+          <div
             v-for="p in otherPlayers"
             :key="p.id"
-            :disabled="isVoteDisabled(p.id)"
-            :class="{ selected: selectedVotes.includes(p.id) }"
-            @click="onToggleVote(p.id)"
-            class="vote-chip"
-            :title="'Голос за: ' + p.nickname"
+            class="vote-item"
+            :class="{ 'vote-item--clickable': !alreadyVoted && !(getVoteCount(p.id) >= 2 && totalVotes >= 2) }"
+            @click="onVoteItemClick(p.id)"
+            :title="alreadyVoted ? 'Голос уже отправлен' : (getVoteCount(p.id) >= 2 || totalVotes >= 2) ? 'Достигнут лимит голосов' : 'Нажмите чтобы добавить голос за ' + p.nickname"
           >
-            <span class="vote-chip__name">{{ p.nickname }}</span>
-            <span class="vote-chip__marker" v-if="selectedVotes.includes(p.id)">✓</span>
-          </button>
+            <div class="vote-item__info">
+              <span class="vote-item__name">{{ p.nickname }}</span>
+              <span class="vote-item__count">{{ getVoteCount(p.id) }}/2</span>
+            </div>
+            <div class="vote-item__controls">
+              <button
+                :disabled="alreadyVoted || getVoteCount(p.id) === 0"
+                @click.stop="onRemoveVote(p.id)"
+                class="vote-btn vote-btn--minus"
+                :title="'Убрать голос за ' + p.nickname"
+              >
+                −
+              </button>
+              <button
+                :disabled="alreadyVoted || getVoteCount(p.id) >= 2 || totalVotes >= 2"
+                @click.stop="onAddVote(p.id)"
+                class="vote-btn vote-btn--plus"
+                :title="'Добавить голос за ' + p.nickname"
+              >
+                +
+              </button>
+            </div>
+          </div>
         </div>
 
         <div class="voting-actions">
           <button
             class="btn-primary vote-submit"
             data-testid="vote-submit"
-            :disabled="selectedVotes.length === 0 || selectedVotes.length > 2 || alreadyVoted"
+            :disabled="totalVotes === 0 || totalVotes > 2 || alreadyVoted"
             @click="onSendVote"
           >
-            Отправить голос ({{ selectedVotes.length }}/2)
+            Отправить голос ({{ totalVotes }}/2)
           </button>
           <span v-if="alreadyVoted" class="voted-note">Голос отправлен</span>
         </div>
@@ -703,7 +722,7 @@ const answeringPlayerId = computed(
 const advancedAnswer = computed(() => (gameStore.gameState.advancedAnswer || '') as string)
 
 // Локальные состояния
-const selectedVotes = ref<string[]>([])
+const selectedVotes = ref<Record<string, number>>({}) // { playerId: voteCount }
 const bet = ref<'0' | '±' | '+' | null>(null)
 const answer = ref('')
 const guess = ref('')
@@ -754,11 +773,25 @@ const myIdShort = computed(() => (myId.value ? myId.value.slice(0, 6) : '—'))
 const myNickname = computed(() => players.value.find((p) => p.id === myId.value)?.nickname || '—')
 const phaseLabel = computed(() => phase.value)
 
-// Доступности
-const isVoteDisabled = (pid: string) =>
-  alreadyVoted.value ||
-  (selectedVotes.value.length >= 2 && !selectedVotes.value.includes(pid)) ||
-  pid === myId.value
+// Новые computed для голосования
+const getVoteCount = (playerId: string) => {
+  // Если голос уже отправлен, показываем фактические голоса из состояния игры
+  if (alreadyVoted.value) {
+    const myVotes = votes.value[myId.value] || []
+    return myVotes.filter(vote => vote === playerId).length
+  }
+  // Иначе показываем локальные выбранные голоса
+  return selectedVotes.value[playerId] || 0
+}
+const totalVotes = computed(() => {
+  // Если голос уже отправлен, показываем общее количество отправленных голосов
+  if (alreadyVoted.value) {
+    const myVotes = votes.value[myId.value] || []
+    return myVotes.length
+  }
+  // Иначе показываем локальные выбранные голоса
+  return Object.values(selectedVotes.value).reduce((sum, count) => sum + count, 0)
+})
 
 // Хэндлеры действий — используем клиентские обертки стора
 const startBasic = () => {
@@ -777,17 +810,40 @@ const onDrawQuestion = () => {
 }
 const onSendVote = () => {
   if (gameStore.connectionStatus !== 'connected') return
-  if (selectedVotes.value.length > 0 && selectedVotes.value.length <= 2 && !alreadyVoted.value) {
-    gameStore.sendVote([...selectedVotes.value])
+  if (totalVotes.value > 0 && totalVotes.value <= 2 && !alreadyVoted.value) {
+    // Конвертируем в массив для отправки в gameStore
+    const votesArray: string[] = []
+    for (const [playerId, count] of Object.entries(selectedVotes.value)) {
+      for (let i = 0; i < count; i++) {
+        votesArray.push(playerId)
+      }
+    }
+    gameStore.sendVote(votesArray)
   }
 }
-const onToggleVote = (id: string) => {
+
+const onVoteItemClick = (playerId: string) => {
+  // Клик по строчке = добавить голос (как нажатие +)
+  onAddVote(playerId)
+}
+
+const onAddVote = (playerId: string) => {
   if (alreadyVoted.value) return
-  if (id === myId.value) return
-  if (selectedVotes.value.includes(id)) {
-    selectedVotes.value = selectedVotes.value.filter((x) => x !== id)
-  } else if (selectedVotes.value.length < 2) {
-    selectedVotes.value.push(id)
+  if (playerId === myId.value) return
+  if (getVoteCount(playerId) >= 2) return
+  if (totalVotes.value >= 2) return
+  
+  selectedVotes.value[playerId] = (selectedVotes.value[playerId] || 0) + 1
+}
+
+const onRemoveVote = (playerId: string) => {
+  if (alreadyVoted.value) return
+  if (playerId === myId.value) return
+  if (getVoteCount(playerId) === 0) return
+  
+  selectedVotes.value[playerId] = (selectedVotes.value[playerId] || 0) - 1
+  if (selectedVotes.value[playerId] === 0) {
+    delete selectedVotes.value[playerId]
   }
 }
 const onSendBet = () => {
@@ -919,7 +975,7 @@ watch(phase, () => {
   // НЕ сбрасываем selectedVotes при появлении вопроса в drawing_question,
   // чтобы пользователь мог выбрать и сразу отправить
   if (phase.value !== 'drawing_question') {
-    selectedVotes.value = []
+    selectedVotes.value = {}
   }
 })
 
@@ -1511,64 +1567,119 @@ watch(
 }
 
 .players-list--voting {
-  gap: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
   margin: 10px 0 14px;
 }
 
-.vote-chip {
-  position: relative;
-  display: inline-flex;
+.vote-item {
+  display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 10px 12px;
+  justify-content: space-between;
+  padding: 12px 16px;
   border-radius: 12px;
   border: 1px solid #e6ecf5;
   background: #ffffff;
-  color: #2c3e50;
-  font-weight: 600;
-  transition:
-    transform 0.12s ease,
-    box-shadow 0.2s ease,
-    border-color 0.2s ease,
-    background 0.2s ease;
+  transition: all 0.2s ease;
+}
+
+.vote-item--clickable {
   cursor: pointer;
 }
 
-.vote-chip:hover:not(:disabled) {
-  transform: translateY(-1px);
-  box-shadow: 0 6px 14px rgba(30, 60, 114, 0.08);
+.vote-item--clickable:hover {
+  border-color: #2ecc71;
+  box-shadow: 0 4px 12px rgba(46, 204, 113, 0.15);
+  background: #f8fff9;
+}
+
+.vote-item:not(.vote-item--clickable):hover {
   border-color: #dbe6f3;
+  box-shadow: 0 2px 8px rgba(30, 60, 114, 0.06);
 }
 
-.vote-chip.selected {
-  background: #eef6ff;
-  border-color: #cfe2ff;
-  box-shadow: 0 6px 14px rgba(36, 99, 235, 0.12);
+.vote-item__info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
 }
 
-.vote-chip:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
-.vote-chip__name {
+.vote-item__name {
+  color: #2c3e50;
+  font-weight: 600;
   max-width: 160px;
   text-overflow: ellipsis;
   white-space: nowrap;
   overflow: hidden;
 }
 
-.vote-chip__marker {
+.vote-item__count {
+  color: #667085;
+  font-size: 0.9rem;
+  font-weight: 500;
+  background: #f9fbff;
+  padding: 4px 8px;
+  border-radius: 8px;
+  border: 1px solid #e6ecf5;
+  min-width: 35px;
+  text-align: center;
+}
+
+.vote-item__controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.vote-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  border: 1px solid #e6ecf5;
+  background: #ffffff;
+  color: #2c3e50;
+  font-weight: 700;
+  font-size: 16px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  user-select: none;
+}
+
+.vote-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 8px rgba(30, 60, 114, 0.08);
+}
+
+.vote-btn--plus {
+  border-color: #2ecc71;
+  color: #2ecc71;
+}
+
+.vote-btn--plus:hover:not(:disabled) {
   background: #2ecc71;
-  color: #fff;
-  font-size: 12px;
-  font-weight: 900;
+  color: #ffffff;
+}
+
+.vote-btn--minus {
+  border-color: #e74c3c;
+  color: #e74c3c;
+}
+
+.vote-btn--minus:hover:not(:disabled) {
+  background: #e74c3c;
+  color: #ffffff;
+}
+
+.vote-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
 }
 
 .voting-actions {
@@ -1681,11 +1792,21 @@ watch(
   }
 
   .players-list--voting {
-    gap: 8px;
+    gap: 6px;
   }
 
-  .vote-chip__name {
+  .vote-item__name {
     max-width: 120px;
+  }
+
+  .vote-item__controls {
+    gap: 6px;
+  }
+
+  .vote-btn {
+    width: 28px;
+    height: 28px;
+    font-size: 14px;
   }
 
   .voting-actions {
