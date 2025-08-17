@@ -107,7 +107,7 @@
           <div
             v-for="p in otherPlayers"
             :key="p.id"
-            class="vote-item"
+            class="vote-item vote-chip"
             :class="{
               'vote-item--clickable':
                 !alreadyVoted && !(getVoteCount(p.id) >= 2 && totalVotes >= 2),

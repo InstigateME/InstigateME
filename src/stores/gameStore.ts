@@ -2211,6 +2211,22 @@ export const useGameStore = defineStore('game', () => {
       gamePhase.value = 'guessing'
       gameState.value.phase = 'guessing'
       broadcastGameState()
+      
+      // Отправляем подтверждение клиенту
+      if (conn) {
+        peerService.sendMessage(
+          conn.peer,
+          makeMessage(
+            'answer_ack',
+            { playerId, answer },
+            {
+              roomId: gameState.value.roomId,
+              fromId: gameState.value.hostId,
+              ts: Date.now(),
+            },
+          ),
+        )
+      }
     })
 
     // Догадки (advanced)
@@ -2240,6 +2256,22 @@ export const useGameStore = defineStore('game', () => {
       }
 
       broadcastGameState()
+      
+      // Отправляем подтверждение клиенту
+      if (conn) {
+        peerService.sendMessage(
+          conn.peer,
+          makeMessage(
+            'guess_ack',
+            { playerId, guess },
+            {
+              roomId: gameState.value.roomId,
+              fromId: gameState.value.hostId,
+              ts: Date.now(),
+            },
+          ),
+        )
+      }
     })
 
     // Обработка выбора победителей в advanced от клиента (строгая авторизация: только автор ответа)
@@ -4420,6 +4452,17 @@ export const useGameStore = defineStore('game', () => {
   // Обработчики ACK для ответов и догадок
   peerService.onMessage('answer_ack' as any, (message: any) => {
     console.log('[ACK] Получено подтверждение ответа:', message.payload)
+    const payload = message.payload || {}
+    const answerKey = JSON.stringify(payload)
+    console.log('[ANSWER_ACK] Received answer confirmation:', answerKey)
+    
+    // Удаляем событие из очереди и разблокируем кнопку
+    const eventIndex = pendingAnswers.value.findIndex(
+      (e) => e.payload.playerId === payload.playerId && e.payload.answer === payload.answer
+    )
+    if (eventIndex >= 0) {
+      pendingAnswers.value.splice(eventIndex, 1)
+    }
     isAnswerSubmitting.value = false
   })
 
@@ -4491,7 +4534,37 @@ export const useGameStore = defineStore('game', () => {
     }, 3000)
   }
 
+  // --- Пул отправленных ответов и блокировка кнопки ---
+  const pendingAnswers = ref<{ type: string; payload: any; attempts: number }[]>([])
+
+  const sendAnswerEvent = (event: { type: string; payload: any; attempts: number }) => {
+    peerService.sendMessage(
+      hostId.value,
+      makeMessage(
+        event.type as any,
+        event.payload,
+        {
+          roomId: roomId.value || gameState.value.roomId,
+          fromId: myPlayerId.value,
+          ts: Date.now(),
+        },
+      ),
+    )
+    // Таймаут на случай отсутствия ответа
+    setTimeout(() => {
+      if (pendingAnswers.value.includes(event) && event.attempts < 3) {
+        event.attempts++
+        sendAnswerEvent(event)
+      } else if (pendingAnswers.value.includes(event)) {
+        // Превышено число попыток — удаляем и разблокируем
+        pendingAnswers.value.splice(pendingAnswers.value.indexOf(event), 1)
+        isAnswerSubmitting.value = false
+      }
+    }, 3000)
+  }
+
   const clientSubmitAnswer = (answer: string) => {
+    if (isAnswerSubmitting.value) return // Предотвращаем дублирование
     if (isHost.value) {
       // Хост локально заполняет и двигает фазу
       if (
@@ -4508,18 +4581,15 @@ export const useGameStore = defineStore('game', () => {
         debugSnapshot('after_answer_to_guessing')
       }
     } else {
-      peerService.sendMessage(
-        hostId.value,
-        makeMessage(
-          'submit_answer',
-          { playerId: myPlayerId.value, answer },
-          {
-            roomId: roomId.value || gameState.value.roomId,
-            fromId: myPlayerId.value,
-            ts: Date.now(),
-          },
-        ),
-      )
+      if (isAnswerSubmitting.value) return
+      isAnswerSubmitting.value = true
+      const event = {
+        type: 'submit_answer' as const,
+        payload: { playerId: myPlayerId.value, answer },
+        attempts: 1,
+      }
+      pendingAnswers.value.push(event)
+      sendAnswerEvent(event)
     }
   }
 

@@ -261,6 +261,8 @@ export type PeerMessage =
   | SubmitAnswerMessage
   | SubmitGuessMessage
   | VoteAckMessage
+  | AnswerAckMessage
+  | GuessAckMessage
   | NextRoundRequestMessage
   | SubmitWinnersMessage
   // Presence
@@ -467,3 +469,16 @@ export interface VoteAckPayload {
   // можно добавить другие поля по необходимости
 }
 export type VoteAckMessage = BaseMessage<'vote_ack', VoteAckPayload>
+
+// Answer and Guess ACK payloads
+export interface AnswerAckPayload {
+  playerId: string
+  answer: string
+}
+export type AnswerAckMessage = BaseMessage<'answer_ack', AnswerAckPayload>
+
+export interface GuessAckPayload {
+  playerId: string
+  guess: string
+}
+export type GuessAckMessage = BaseMessage<'guess_ack', GuessAckPayload>
