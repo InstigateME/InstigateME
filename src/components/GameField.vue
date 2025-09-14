@@ -283,6 +283,7 @@
             class="guessing-textarea"
             v-model="guess"
             placeholder="Ваш вариант ответа"
+            :readonly="alreadyGuessed"
           ></textarea>
           <div class="guessing-actions">
             <button
@@ -2113,6 +2114,13 @@ watch(
   outline: none;
   border-color: #98b7ff;
   box-shadow: 0 0 0 3px rgba(152, 183, 255, 0.25);
+}
+
+.guessing-textarea[readonly] {
+  background: #f8f9fa;
+  color: #6c757d;
+  cursor: not-allowed;
+  border-color: #e9ecef;
 }
 
 .guessing-actions {
